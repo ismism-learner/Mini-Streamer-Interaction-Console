@@ -1,0 +1,29 @@
+# 小主播互动机 - 项目配置
+
+# ===== 音频采集参数 =====
+SAMPLE_RATE: 16000
+CHANNELS: 1
+DTYPE: int16
+CHUNK_DURATION_MS: 30  # VAD 帧长度 30ms
+SILENCE_TIMEOUT_MS: 1500  # 静默 1.5s 认为一句话说完
+MAX_RECORDING_MINUTES: 10  # 最长连续录音 10 分钟
+
+# ===== 触发条件 =====
+MIN_WORDS_FOR_QUESTION: 50  # 测试用：30字就触发（正式用可以改回2000）
+MAX_WORDS_FORCE_TRIGGER: 100  # 最多100字强制触发
+
+# ===== STT 配置 =====
+# 使用 faster-whisper，模型大小可选: tiny, base, small, medium, large-v3
+WHISPER_MODEL_SIZE: small
+WHISPER_DEVICE: cpu  # 可选 cpu / cuda
+WHISPER_COMPUTE_TYPE: int8  # 可选: float16, int8_float16, int8
+
+# ===== LLM 配置 =====
+# 硅基流动 API (兼容 OpenAI 格式)
+LLM_API_BASE: https://api.siliconflow.cn/v1
+LLM_API_KEY: sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  # 请在 .env 中设置
+LLM_MODEL: Qwen/Qwen3.6-27B  # 硅基流动支持的模型
+
+# ===== 服务器配置 =====
+SERVER_HOST: 127.0.0.1
+SERVER_PORT: 8765
