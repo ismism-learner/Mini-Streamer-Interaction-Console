@@ -46,23 +46,32 @@ try:
     DISABLE_EMOJI = _cfg.DISABLE_EMOJI
     DISPLAY_X = _cfg.DISPLAY_X  # -1 = auto (right-bottom)
     DISPLAY_Y = _cfg.DISPLAY_Y  # -1 = auto (right-bottom)
-    DISPLAY_WIDTH = _cfg.DISPLAY_WIDTH  # 420
+    DISPLAY_CHARS_PER_LINE = _cfg.DISPLAY_CHARS_PER_LINE  # chars per line
     DISPLAY_HEIGHT = _cfg.DISPLAY_HEIGHT  # 340
     DISPLAY_DISAPPEAR_MODE = _cfg.DISPLAY_DISAPPEAR_MODE  # timed/keep/stack
     DISPLAY_DISAPPEAR_SECONDS = _cfg.DISPLAY_DISAPPEAR_SECONDS  # seconds
-    DISPLAY_MAX_TEXT_LENGTH = _cfg.DISPLAY_MAX_TEXT_LENGTH  # max chars in bubble
 except Exception:
     DISPLAY_FONT_FAMILY = "Microsoft YaHei UI, PingFang SC, sans-serif"
     DISPLAY_FONT_SIZE = 28
     DISABLE_EMOJI = False
     DISPLAY_X = -1
     DISPLAY_Y = -1
-    DISPLAY_WIDTH = 420
+    DISPLAY_CHARS_PER_LINE = 12
     DISPLAY_HEIGHT = 340
     DISPLAY_DISAPPEAR_MODE = "timed"
     DISPLAY_DISAPPEAR_SECONDS = 4
-    DISPLAY_MAX_TEXT_LENGTH = 50
     _SYSTEM_PROMPT = "（无法加载 LLM 提示词）"
+
+
+def _compute_bubble_width(chars_per_line: int, font_family: str, font_size: int) -> int:
+    """根据每行字符数计算气泡像素宽度（含内边距）"""
+    font = QtGui.QFont(font_family.split(",")[0].strip().strip("'\""), font_size)
+    fm = QtGui.QFontMetrics(font)
+    # 用中文全角字符宽度估算（一个中文字 ≈ font_size * 1.0~1.2 px）
+    # 更精确：用 "宽" 字的实际宽度
+    char_width = fm.horizontalAdvance("宽")
+    text_width = char_width * chars_per_line
+    return text_width + 40  # 左右各20px内边距
 
 
 class QuestionBubble(QtWidgets.QWidget):
@@ -93,18 +102,21 @@ class QuestionBubble(QtWidgets.QWidget):
         )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        # Ctrl+拖动移动气泡
+        self._ctrl_dragging = False
+        self._ctrl_drag_offset = QtCore.QPoint()
+
+        # 计算气泡像素宽度
+        bubble_max_width = _compute_bubble_width(
+            DISPLAY_CHARS_PER_LINE, DISPLAY_FONT_FAMILY, DISPLAY_FONT_SIZE
+        )
 
         # 内容
         label = QtWidgets.QLabel(self)
         self.bubble_label = label
         label.setWordWrap(True)
-        label.setMaximumWidth(DISPLAY_WIDTH - 40)
-
-        # 截断过长文字
-        display_text = text
-        if DISPLAY_MAX_TEXT_LENGTH > 0 and len(display_text) > DISPLAY_MAX_TEXT_LENGTH:
-            display_text = display_text[:DISPLAY_MAX_TEXT_LENGTH] + "…"
+        label.setMaximumWidth(bubble_max_width - 40)
 
         html_text = (
             '<div style="'
@@ -114,16 +126,13 @@ class QuestionBubble(QtWidgets.QWidget):
             "  text-shadow: 0 2px 8px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.6);"
             "  line-height: 1.4;"
             f"  font-family: '{DISPLAY_FONT_FAMILY}';"
-            '">'
-            + ("" if DISABLE_EMOJI else "  💡 ")
-            + _escape_html(display_text)
-            + "</div>"
+            '">' + ("" if DISABLE_EMOJI else "  💡 ") + _escape_html(text) + "</div>"
         )
         label.setText(html_text)
         label.adjustSize()
 
         # 气泡尺寸
-        bw = min(label.width() + 40, DISPLAY_WIDTH)
+        bw = min(label.width() + 40, bubble_max_width)
         bh = max(label.height() + 30, 50)
         self.setFixedSize(bw, bh)
 
@@ -164,6 +173,65 @@ class QuestionBubble(QtWidgets.QWidget):
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         rect = self.rect().adjusted(2, 2, -2, -2)
         painter.drawRoundedRect(rect, 16, 16)
+
+    # ── Ctrl+拖动移动气泡 ──────────────────────────────
+
+    def mousePressEvent(self, event):
+        """按住Ctrl+左键开始拖动"""
+        if (
+            event.button() == QtCore.Qt.MouseButton.LeftButton
+            and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier
+        ):
+            self._ctrl_dragging = True
+            self._ctrl_drag_offset = event.position().toPoint()
+            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Ctrl+拖动时移动气泡"""
+        if self._ctrl_dragging:
+            delta = event.position().toPoint() - self._ctrl_drag_offset
+            new_pos = self.pos() + delta
+            self.move(new_pos)
+            # 更新全局位置
+            global DISPLAY_X, DISPLAY_Y
+            DISPLAY_X = new_pos.x()
+            DISPLAY_Y = new_pos.y()
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """松开鼠标结束拖动，保存位置到config"""
+        if self._ctrl_dragging:
+            self._ctrl_dragging = False
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+            # 写回 config.yaml
+            global DISPLAY_X, DISPLAY_Y
+            _cfg.DISPLAY_X = DISPLAY_X
+            _cfg.DISPLAY_Y = DISPLAY_Y
+            try:
+                config_path = Path(__file__).parent / "config.yaml"
+                with open(config_path, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+                cfg["DISPLAY_X"] = DISPLAY_X
+                cfg["DISPLAY_Y"] = DISPLAY_Y
+                with open(config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(
+                        cfg,
+                        f,
+                        allow_unicode=True,
+                        default_flow_style=False,
+                        sort_keys=False,
+                    )
+            except Exception as exc:
+                log.warning(f"写入位置失败: {exc}")
+            log.info(f"气泡位置已更新: x={DISPLAY_X}, y={DISPLAY_Y}")
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
     # ── 动画阶段 ──────────────────────────────────────
 
@@ -293,50 +361,15 @@ def _create_tray_icon(app: QtWidgets.QApplication) -> QtWidgets.QSystemTrayIcon:
 
     # ── 右键菜单 ──
     menu = QtWidgets.QMenu()
-    pos_action = menu.addAction("调整位置(P)")
     settings_action = menu.addAction("设置(S)")
     menu.addSeparator()
     quit_action = menu.addAction("退出(Q)")
-
-    # 调整位置：直接打开全屏拖拽编辑器
-    def _open_position_editor():
-        global DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
-        editor = BubblePositionEditor()
-        editor.set_position(DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT)
-        result = editor.exec_edit()
-        if result is not None:
-            DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT = result
-            _cfg.DISPLAY_X = DISPLAY_X
-            _cfg.DISPLAY_Y = DISPLAY_Y
-            _cfg.DISPLAY_WIDTH = DISPLAY_WIDTH
-            _cfg.DISPLAY_HEIGHT = DISPLAY_HEIGHT
-            # 写回 config.yaml
-            try:
-                config_path = Path(__file__).parent / "config.yaml"
-                with open(config_path, "r", encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
-                cfg["DISPLAY_X"] = DISPLAY_X
-                cfg["DISPLAY_Y"] = DISPLAY_Y
-                cfg["DISPLAY_WIDTH"] = DISPLAY_WIDTH
-                cfg["DISPLAY_HEIGHT"] = DISPLAY_HEIGHT
-                with open(config_path, "w", encoding="utf-8") as f:
-                    yaml.dump(
-                        cfg,
-                        f,
-                        allow_unicode=True,
-                        default_flow_style=False,
-                        sort_keys=False,
-                    )
-            except Exception as exc:
-                log.warning(f"写入位置失败: {exc}")
-            log.info(f"位置已更新: x={DISPLAY_X}, y={DISPLAY_Y}, w={DISPLAY_WIDTH}")
 
     # 设置：打开 SettingsDialog
     def _open_settings():
         dialog = SettingsDialog()
         dialog.exec()
 
-    pos_action.triggered.connect(_open_position_editor)
     settings_action.triggered.connect(_open_settings)
 
     # 退出
@@ -353,283 +386,6 @@ def _create_tray_icon(app: QtWidgets.QApplication) -> QtWidgets.QSystemTrayIcon:
 
     icon.setContextMenu(menu)
     return icon
-
-
-class BubblePositionEditor(QtWidgets.QWidget):
-    """全屏气泡位置编辑器 — 在屏幕上直接拖拽虚拟气泡调整位置和宽度
-
-    进入编辑模式后，屏幕上出现一个跟真实气泡样式一样的虚拟气泡，
-    可以拖动气泡移动位置，拖动左右手柄调整宽度。
-    底部有"确认"和"取消"按钮（纯绘制，不使用子控件）。
-    """
-
-    HANDLE_WIDTH = 16  # 手柄宽度 px
-    MIN_BUBBLE_WIDTH = 120  # 最小气泡宽度 px
-    BTN_HEIGHT = 36  # 按钮高度 px
-
-    # 完成信号（用于 exec_edit 的事件循环）
-    _finished = QtCore.Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._screen_geo = QtWidgets.QApplication.primaryScreen().geometry()
-
-        self.setWindowFlags(
-            QtCore.Qt.WindowType.FramelessWindowHint
-            | QtCore.Qt.WindowType.WindowStaysOnTopHint
-            | QtCore.Qt.WindowType.Tool
-        )
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setGeometry(self._screen_geo)
-        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
-
-        # 气泡状态（屏幕坐标）
-        self._bubble_x = 0
-        self._bubble_y = 0
-        self._bubble_w = 420
-        self._bubble_h = 80
-
-        # 拖拽状态
-        self._dragging = False
-        self._resizing_left = False
-        self._resizing_right = False
-        self._drag_offset_x = 0
-        self._drag_offset_y = 0
-
-        # 结果
-        self._result = None
-
-    def set_position(self, x, y, w, h):
-        """从屏幕坐标设置气泡位置"""
-        screen_w = self._screen_geo.width()
-        screen_h = self._screen_geo.height()
-        self._bubble_w = w
-        self._bubble_h = max(h, 60)
-        self._bubble_x = x if x >= 0 else screen_w - w - 30
-        self._bubble_y = y if y >= 0 else screen_h - self._bubble_h - 40
-        # 确保按钮区域不超出屏幕
-        if self._bubble_y + self._bubble_h + self.BTN_HEIGHT + 12 > screen_h:
-            self._bubble_y = screen_h - self._bubble_h - self.BTN_HEIGHT - 12
-        self.update()
-
-    def get_position(self):
-        """返回屏幕坐标 (x, y, w, h)"""
-        return self._bubble_x, self._bubble_y, self._bubble_w, self._bubble_h
-
-    def _bubble_rect(self):
-        return QtCore.QRect(
-            int(self._bubble_x),
-            int(self._bubble_y),
-            int(self._bubble_w),
-            int(self._bubble_h),
-        )
-
-    def _left_handle_rect(self):
-        return QtCore.QRect(
-            int(self._bubble_x - self.HANDLE_WIDTH // 2),
-            int(self._bubble_y),
-            self.HANDLE_WIDTH,
-            int(self._bubble_h),
-        )
-
-    def _right_handle_rect(self):
-        rx = self._bubble_x + self._bubble_w - self.HANDLE_WIDTH // 2
-        return QtCore.QRect(
-            int(rx), int(self._bubble_y), self.HANDLE_WIDTH, int(self._bubble_h)
-        )
-
-    def _confirm_btn_rect(self):
-        """确认按钮区域"""
-        by = self._bubble_y + self._bubble_h + 8
-        return QtCore.QRect(int(self._bubble_x), int(by), 120, self.BTN_HEIGHT)
-
-    def _cancel_btn_rect(self):
-        """取消按钮区域"""
-        by = self._bubble_y + self._bubble_h + 8
-        return QtCore.QRect(int(self._bubble_x + 130), int(by), 80, self.BTN_HEIGHT)
-
-    def paintEvent(self, event):
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-
-        # 半透明遮罩
-        painter.setBrush(QtGui.QColor(0, 0, 0, 60))
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.drawRect(self.rect())
-
-        # 气泡本体
-        bubble = self._bubble_rect().adjusted(2, 2, -2, -2)
-        painter.setBrush(QtGui.QColor(20, 20, 30, 200))
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(bubble, 16, 16)
-
-        # 绿色虚线边框
-        pen = QtGui.QPen(QtGui.QColor("#4CAF50"), 2, QtCore.Qt.PenStyle.DashLine)
-        painter.setPen(pen)
-        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(bubble, 16, 16)
-
-        # 气泡内文字
-        painter.setPen(QtGui.QColor(255, 255, 255, 220))
-        font = painter.font()
-        font.setPointSize(min(DISPLAY_FONT_SIZE, 20))
-        font.setFamily(DISPLAY_FONT_FAMILY.split(",")[0].strip().strip("'\""))
-        painter.setFont(font)
-        text = "拖动我调整位置" if not DISABLE_EMOJI else "拖动调整位置"
-        painter.drawText(bubble, QtCore.Qt.AlignmentFlag.AlignCenter, text)
-
-        # 左手柄
-        lh = self._left_handle_rect()
-        painter.setBrush(QtGui.QColor(76, 175, 80, 180))
-        painter.setPen(QtGui.QPen(QtGui.QColor("#4CAF50"), 1))
-        painter.drawRoundedRect(lh, 4, 4)
-        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 180), 2))
-        mid_x = lh.x() + lh.width() // 2
-        painter.drawLine(mid_x, lh.y() + 10, mid_x, lh.y() + lh.height() - 10)
-
-        # 右手柄
-        rh = self._right_handle_rect()
-        painter.setBrush(QtGui.QColor(76, 175, 80, 180))
-        painter.setPen(QtGui.QPen(QtGui.QColor("#4CAF50"), 1))
-        painter.drawRoundedRect(rh, 4, 4)
-        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 180), 2))
-        mid_x2 = rh.x() + rh.width() // 2
-        painter.drawLine(mid_x2, rh.y() + 10, mid_x2, rh.y() + rh.height() - 10)
-
-        # 确认按钮
-        cb = self._confirm_btn_rect()
-        painter.setBrush(QtGui.QColor("#4CAF50"))
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(cb, 6, 6)
-        painter.setPen(QtGui.QColor(255, 255, 255))
-        font.setPointSize(12)
-        painter.setFont(font)
-        painter.drawText(cb, QtCore.Qt.AlignmentFlag.AlignCenter, "确认位置")
-
-        # 取消按钮
-        xb = self._cancel_btn_rect()
-        painter.setBrush(QtGui.QColor("#666666"))
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(xb, 6, 6)
-        painter.setPen(QtGui.QColor(255, 255, 255))
-        painter.drawText(xb, QtCore.Qt.AlignmentFlag.AlignCenter, "取消")
-
-    def mousePressEvent(self, event):
-        if event.button() != QtCore.Qt.MouseButton.LeftButton:
-            return
-        mx, my = event.position().x(), event.position().y()
-
-        # 检查按钮
-        if self._confirm_btn_rect().contains(int(mx), int(my)):
-            self._on_confirm()
-            return
-        if self._cancel_btn_rect().contains(int(mx), int(my)):
-            self._on_cancel()
-            return
-
-        # 检查左右手柄
-        if self._left_handle_rect().contains(int(mx), int(my)):
-            self._resizing_left = True
-            self._drag_offset_x = mx
-            return
-        if self._right_handle_rect().contains(int(mx), int(my)):
-            self._resizing_right = True
-            self._drag_offset_x = mx
-            return
-
-        # 检查气泡内部
-        if self._bubble_rect().contains(int(mx), int(my)):
-            self._dragging = True
-            self._drag_offset_x = mx - self._bubble_x
-            self._drag_offset_y = my - self._bubble_y
-            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
-
-    def mouseMoveEvent(self, event):
-        mx, my = event.position().x(), event.position().y()
-
-        if self._dragging:
-            self._bubble_x = mx - self._drag_offset_x
-            self._bubble_y = my - self._drag_offset_y
-            self._clamp_bubble()
-            self.update()
-        elif self._resizing_left:
-            dx = mx - self._drag_offset_x
-            new_x = self._bubble_x + dx
-            new_w = self._bubble_w - dx
-            if new_w >= self.MIN_BUBBLE_WIDTH:
-                self._bubble_x = new_x
-                self._bubble_w = new_w
-                self._drag_offset_x = mx
-                self.update()
-        elif self._resizing_right:
-            dx = mx - self._drag_offset_x
-            new_w = self._bubble_w + dx
-            if new_w >= self.MIN_BUBBLE_WIDTH:
-                self._bubble_w = new_w
-                self._drag_offset_x = mx
-                self.update()
-        else:
-            # 光标提示
-            if self._confirm_btn_rect().contains(int(mx), int(my)):
-                self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-            elif self._cancel_btn_rect().contains(int(mx), int(my)):
-                self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-            elif self._left_handle_rect().contains(int(mx), int(my)):
-                self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
-            elif self._right_handle_rect().contains(int(mx), int(my)):
-                self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
-            elif self._bubble_rect().contains(int(mx), int(my)):
-                self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
-            else:
-                self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-
-    def mouseReleaseEvent(self, event):
-        self._dragging = False
-        self._resizing_left = False
-        self._resizing_right = False
-        self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-
-    def _clamp_bubble(self):
-        """限制气泡在屏幕内，同时确保按钮区域可见"""
-        sw = self._screen_geo.width()
-        sh = self._screen_geo.height()
-        self._bubble_x = max(0, min(self._bubble_x, sw - self._bubble_w))
-        self._bubble_y = max(
-            0, min(self._bubble_y, sh - self._bubble_h - self.BTN_HEIGHT - 12)
-        )
-
-    def _on_confirm(self):
-        self._result = (
-            int(self._bubble_x),
-            int(self._bubble_y),
-            int(self._bubble_w),
-            int(self._bubble_h),
-        )
-        self.hide()
-        self._finished.emit()
-
-    def _on_cancel(self):
-        self._result = None
-        self.hide()
-        self._finished.emit()
-
-    def keyPressEvent(self, event):
-        if event.key() == QtCore.Qt.Key.Key_Escape:
-            self._on_cancel()
-        else:
-            super().keyPressEvent(event)
-
-    def exec_edit(self):
-        """显示编辑器并等待结果，返回 (x, y, w, h) 或 None"""
-        self.show()
-        self.raise_()
-        self.setFocus()
-        loop = QtCore.QEventLoop()
-        self._finished.connect(loop.quit)
-        loop.exec()
-        self.close()
-        self.deleteLater()
-        return self._result
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -686,10 +442,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.disappear_spin.setSuffix(" 秒")
         display_layout.addRow("停留时间:", self.disappear_spin)
 
-        self.max_text_spin = QtWidgets.QSpinBox()
-        self.max_text_spin.setRange(10, 200)
-        self.max_text_spin.setSuffix(" 字")
-        display_layout.addRow("最大显示字数:", self.max_text_spin)
+        self.chars_per_line_spin = QtWidgets.QSpinBox()
+        self.chars_per_line_spin.setRange(4, 40)
+        self.chars_per_line_spin.setSuffix(" 字")
+        display_layout.addRow("一行显示字数:", self.chars_per_line_spin)
 
         layout.addWidget(display_group)
 
@@ -708,28 +464,6 @@ class SettingsDialog(QtWidgets.QDialog):
         trigger_cond_layout.addRow("最大强制触发:", self.max_words_spin)
 
         layout.addWidget(trigger_cond_group)
-
-        # ── 弹窗位置 ──
-        pos_group = QtWidgets.QGroupBox("弹窗位置")
-        pos_layout = QtWidgets.QVBoxLayout(pos_group)
-
-        pos_hint = QtWidgets.QLabel(
-            "点击下方按钮，在屏幕上直接拖拽虚拟气泡调整位置和宽度"
-        )
-        pos_hint.setStyleSheet("color: #888; font-size: 12px;")
-        pos_layout.addWidget(pos_hint)
-
-        self.pos_btn = QtWidgets.QPushButton("调整位置...")
-        self.pos_btn.setStyleSheet("QPushButton { padding: 8px; font-size: 14px; }")
-        self.pos_btn.clicked.connect(self._open_position_editor)
-        pos_layout.addWidget(self.pos_btn)
-
-        self._pos_x = DISPLAY_X
-        self._pos_y = DISPLAY_Y
-        self._pos_w = DISPLAY_WIDTH
-        self._pos_h = DISPLAY_HEIGHT
-
-        layout.addWidget(pos_group)
 
         # ── 截断提示词 ──
         trigger_group = QtWidgets.QGroupBox("截断提示词")
@@ -776,7 +510,6 @@ class SettingsDialog(QtWidgets.QDialog):
     def _load_current_values(self):
         """从当前全局变量加载值到 UI 控件"""
         global DISPLAY_FONT_FAMILY, DISPLAY_FONT_SIZE, DISABLE_EMOJI
-        global DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
 
         # 字体 — 匹配或添加自定义值
         idx = self.font_combo.findText(DISPLAY_FONT_FAMILY)
@@ -793,7 +526,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if idx >= 0:
             self.disappear_combo.setCurrentIndex(idx)
         self.disappear_spin.setValue(DISPLAY_DISAPPEAR_SECONDS)
-        self.max_text_spin.setValue(DISPLAY_MAX_TEXT_LENGTH)
+        self.chars_per_line_spin.setValue(DISPLAY_CHARS_PER_LINE)
 
         # 触发条件
         self.min_words_spin.setValue(_cfg.MIN_WORDS_FOR_QUESTION)
@@ -806,28 +539,10 @@ class SettingsDialog(QtWidgets.QDialog):
         # LLM 提示词
         self.prompt_edit.setPlainText(_SYSTEM_PROMPT)
 
-        # 弹窗位置
-        self._pos_x = DISPLAY_X
-        self._pos_y = DISPLAY_Y
-        self._pos_w = DISPLAY_WIDTH
-        self._pos_h = DISPLAY_HEIGHT
-
-    def _open_position_editor(self):
-        """打开全屏气泡位置编辑器"""
-        editor = BubblePositionEditor()
-        editor.set_position(self._pos_x, self._pos_y, self._pos_w, self._pos_h)
-        result = editor.exec_edit()
-        if result is not None:
-            self._pos_x, self._pos_y, self._pos_w, self._pos_h = result
-
     def _on_save(self):
         """保存设置：更新全局变量 + 写回 config.yaml"""
         global DISPLAY_FONT_FAMILY, DISPLAY_FONT_SIZE, DISABLE_EMOJI
-        global DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
-        global \
-            DISPLAY_DISAPPEAR_MODE, \
-            DISPLAY_DISAPPEAR_SECONDS, \
-            DISPLAY_MAX_TEXT_LENGTH
+        global DISPLAY_DISAPPEAR_MODE, DISPLAY_DISAPPEAR_SECONDS, DISPLAY_CHARS_PER_LINE
 
         # 1. 读取值
         font_family = self.font_combo.currentText().strip()
@@ -835,33 +550,24 @@ class SettingsDialog(QtWidgets.QDialog):
         disable_emoji = self.emoji_check.isChecked()
         disappear_mode = self.disappear_combo.currentData()
         disappear_seconds = self.disappear_spin.value()
-        max_text_length = self.max_text_spin.value()
+        chars_per_line = self.chars_per_line_spin.value()
         min_words = self.min_words_spin.value()
         max_words = self.max_words_spin.value()
         trigger_lines = self.trigger_edit.toPlainText().strip().splitlines()
         trigger_phrases = [line.strip() for line in trigger_lines if line.strip()]
-        pos_x, pos_y, pos_w, pos_h = self._pos_x, self._pos_y, self._pos_w, self._pos_h
 
         # 2. 更新运行时全局变量
         DISPLAY_FONT_FAMILY = font_family
         DISPLAY_FONT_SIZE = font_size
         DISABLE_EMOJI = disable_emoji
-        DISPLAY_X = pos_x
-        DISPLAY_Y = pos_y
-        DISPLAY_WIDTH = pos_w
-        DISPLAY_HEIGHT = pos_h
         DISPLAY_DISAPPEAR_MODE = disappear_mode
         DISPLAY_DISAPPEAR_SECONDS = disappear_seconds
-        DISPLAY_MAX_TEXT_LENGTH = max_text_length
+        DISPLAY_CHARS_PER_LINE = chars_per_line
         if hasattr(_cfg, "TRIGGER_PHRASES"):
             _cfg.TRIGGER_PHRASES = trigger_phrases
-        _cfg.DISPLAY_X = pos_x
-        _cfg.DISPLAY_Y = pos_y
-        _cfg.DISPLAY_WIDTH = pos_w
-        _cfg.DISPLAY_HEIGHT = pos_h
         _cfg.DISPLAY_DISAPPEAR_MODE = disappear_mode
         _cfg.DISPLAY_DISAPPEAR_SECONDS = disappear_seconds
-        _cfg.DISPLAY_MAX_TEXT_LENGTH = max_text_length
+        _cfg.DISPLAY_CHARS_PER_LINE = chars_per_line
         _cfg.MIN_WORDS_FOR_QUESTION = min_words
         _cfg.MAX_WORDS_FORCE_TRIGGER = max_words
 
@@ -874,13 +580,9 @@ class SettingsDialog(QtWidgets.QDialog):
             cfg["DISPLAY_FONT_FAMILY"] = font_family
             cfg["DISPLAY_FONT_SIZE"] = font_size
             cfg["DISABLE_EMOJI"] = disable_emoji
-            cfg["DISPLAY_X"] = pos_x
-            cfg["DISPLAY_Y"] = pos_y
-            cfg["DISPLAY_WIDTH"] = pos_w
-            cfg["DISPLAY_HEIGHT"] = pos_h
             cfg["DISPLAY_DISAPPEAR_MODE"] = disappear_mode
             cfg["DISPLAY_DISAPPEAR_SECONDS"] = disappear_seconds
-            cfg["DISPLAY_MAX_TEXT_LENGTH"] = max_text_length
+            cfg["DISPLAY_CHARS_PER_LINE"] = chars_per_line
             cfg["MIN_WORDS_FOR_QUESTION"] = min_words
             cfg["MAX_WORDS_FORCE_TRIGGER"] = max_words
             cfg["TRIGGER_PHRASES"] = trigger_phrases
