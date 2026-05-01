@@ -34,6 +34,9 @@ class AudioCapture:
         self.on_utterance_complete = None  # 一句话说完回调: func(audio_bytes)
         self.on_question_ready = None  # 问题生成回调: func(question)
 
+        # 截断提示词列表
+        self.trigger_phrases = config.TRIGGER_PHRASES
+
     def _vad_has_speech(self, audio_chunk: bytes) -> bool:
         """检测音频块是否包含语音"""
         # webrtcvad 需要 10/20/30ms 帧，16-bit PCM
@@ -134,11 +137,25 @@ class AudioCapture:
             print(f"[累积] 当前总字数: {self.total_char_count}")
             print(f"[文字] {text[:100]}...")
 
+            # 检测是否包含截断提示词（优先级最高）
+            if self._has_trigger_phrase(text):
+                print(f"[截断] 检测到截断提示词，立即触发提问！")
+                await self._trigger_question()
+                return
+
             # 检查是否达到提问阈值
             if self.total_char_count >= config.MAX_WORDS_FORCE_TRIGGER:
                 await self._trigger_question()
             elif self.total_char_count >= config.MIN_WORDS_FOR_QUESTION:
                 await self._trigger_question()
+
+    def _has_trigger_phrase(self, text: str) -> bool:
+        """检测文本中是否包含截断提示词"""
+        for phrase in config.TRIGGER_PHRASES:
+            if phrase in text:
+                print(f"[截断] 命中提示词: '{phrase}'")
+                return True
+        return False
 
     async def _trigger_question(self):
         """触发 LLM 生成问题"""

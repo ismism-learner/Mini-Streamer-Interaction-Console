@@ -9,8 +9,25 @@ SILENCE_TIMEOUT_MS: 1500  # 静默 1.5s 认为一句话说完
 MAX_RECORDING_MINUTES: 10  # 最长连续录音 10 分钟
 
 # ===== 触发条件 =====
-MIN_WORDS_FOR_QUESTION: 50  # 测试用：30字就触发（正式用可以改回2000）
+MIN_WORDS_FOR_QUESTION: 50  # 测试用：50字就触发（正式用可以改回2000）
 MAX_WORDS_FORCE_TRIGGER: 100  # 最多100字强制触发
+
+# ===== 截断提示词 =====
+# 当主播说的内容包含以下词/句时，不等攒满字数，立即生成问题
+# 适合用来模拟"观众被戳中痛点"的即时互动
+TRIGGER_PHRASES:
+  - "你明白了吗"
+  - "你们懂了没有"
+  - "听懂了吗"
+  - "你学会了吗"
+  - "懂了吗"
+  - "明白了没有"
+
+# ===== 显示配置 =====
+# 弹窗文字样式（前端 overlay 使用）
+DISPLAY_FONT_FAMILY: "Microsoft YaHei UI, PingFang SC, sans-serif"
+DISPLAY_FONT_SIZE: 28  # px
+DISABLE_EMOJI: false  # true = LLM 生成问题时不使用 emoji
 
 # ===== STT 配置 =====
 # 使用 faster-whisper，模型大小可选: tiny, base, small, medium, large-v3

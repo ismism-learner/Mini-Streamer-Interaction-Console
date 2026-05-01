@@ -32,6 +32,23 @@ QUESTION_AREA_WIDTH = 420  # 显示区域宽度
 QUESTION_AREA_HEIGHT = 340  # 显示区域高度
 QUESTION_BOTTOM_MARGIN = 40  # 距底部边距
 
+# ── 从后端配置读取显示参数 ──
+import sys as _sys
+import os as _os
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).parent))
+try:
+    from backend.config import config as _cfg
+
+    DISPLAY_FONT_FAMILY = _cfg.DISPLAY_FONT_FAMILY
+    DISPLAY_FONT_SIZE = _cfg.DISPLAY_FONT_SIZE
+    DISABLE_EMOJI = _cfg.DISABLE_EMOJI
+except Exception:
+    DISPLAY_FONT_FAMILY = "Microsoft YaHei UI, PingFang SC, sans-serif"
+    DISPLAY_FONT_SIZE = 28
+    DISABLE_EMOJI = False
+
 
 class QuestionBubble(QtWidgets.QWidget):
     """单个问题气泡 — 自动执行 出现→停留→消失 动画"""
@@ -56,14 +73,13 @@ class QuestionBubble(QtWidgets.QWidget):
 
         html_text = (
             '<div style="'
-            "  font-size: 28px;"
+            f"  font-size: {DISPLAY_FONT_SIZE}px;"
             "  font-weight: 600;"
             "  color: #ffffff;"
             "  text-shadow: 0 2px 8px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.6);"
             "  line-height: 1.4;"
-            "  font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', sans-serif;"
-            '">'
-            "  💡 " + _escape_html(text) + "</div>"
+            f"  font-family: '{DISPLAY_FONT_FAMILY}';"
+            '">' + ("" if DISABLE_EMOJI else "  💡 ") + _escape_html(text) + "</div>"
         )
         label.setText(html_text)
         label.adjustSize()

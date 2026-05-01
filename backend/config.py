@@ -42,6 +42,16 @@ class Config:
         self.MIN_WORDS_FOR_QUESTION = cfg.get("MIN_WORDS_FOR_QUESTION", 2000)
         self.MAX_WORDS_FORCE_TRIGGER = cfg.get("MAX_WORDS_FORCE_TRIGGER", 3000)
 
+        # 截断提示词
+        self.TRIGGER_PHRASES = cfg.get("TRIGGER_PHRASES", ["你明白了吗", "听懂了吗"])
+
+        # 显示配置
+        self.DISPLAY_FONT_FAMILY = cfg.get(
+            "DISPLAY_FONT_FAMILY", "Microsoft YaHei UI, PingFang SC, sans-serif"
+        )
+        self.DISPLAY_FONT_SIZE = cfg.get("DISPLAY_FONT_SIZE", 28)
+        self.DISABLE_EMOJI = cfg.get("DISABLE_EMOJI", False)
+
         # STT 配置
         self.WHISPER_MODEL_SIZE = cfg.get("WHISPER_MODEL_SIZE", "small")
         self.WHISPER_DEVICE = cfg.get("WHISPER_DEVICE", "cpu")
