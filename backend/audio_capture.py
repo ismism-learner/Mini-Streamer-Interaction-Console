@@ -7,6 +7,25 @@ import webrtcvad
 from collections import deque
 from backend.config import config
 from backend.stt import transcribe_audio
+from pathlib import Path
+import yaml
+
+
+def _reload_thresholds():
+    """从 config.yaml 重新读取触发阈值（前端可能已修改）"""
+    try:
+        config_path = Path(__file__).parent.parent / "config.yaml"
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        config.MIN_WORDS_FOR_QUESTION = cfg.get(
+            "MIN_WORDS_FOR_QUESTION", config.MIN_WORDS_FOR_QUESTION
+        )
+        config.MAX_WORDS_FORCE_TRIGGER = cfg.get(
+            "MAX_WORDS_FORCE_TRIGGER", config.MAX_WORDS_FORCE_TRIGGER
+        )
+        config.TRIGGER_PHRASES = cfg.get("TRIGGER_PHRASES", config.TRIGGER_PHRASES)
+    except Exception:
+        pass
 
 
 class AudioCapture:
@@ -142,6 +161,9 @@ class AudioCapture:
                 print(f"[截断] 检测到截断提示词，立即触发提问！")
                 await self._trigger_question()
                 return
+
+            # 重新读取阈值（前端可能已修改config.yaml）
+            _reload_thresholds()
 
             # 检查是否达到提问阈值
             if self.total_char_count >= config.MAX_WORDS_FORCE_TRIGGER:

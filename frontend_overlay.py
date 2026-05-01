@@ -716,6 +716,16 @@ def main():
     global _global_overlay_window
     _global_overlay_window = overlay
 
+    # ── 启动时立即显示欢迎气泡 ──
+    screen = QtWidgets.QApplication.primaryScreen()
+    welcome_text = "小主播互动机已启动！按住 Ctrl+左键 可拖动此气泡"
+    welcome = QuestionBubble(
+        welcome_text,
+        screen.geometry(),
+        disappear_mode="timed",
+        disappear_seconds=5,
+    )
+
     # ── 系统托盘图标 ──
     tray = _create_tray_icon(app)
     tray.show()
