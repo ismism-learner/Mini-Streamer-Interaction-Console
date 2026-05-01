@@ -14,7 +14,7 @@ echo [config] port: 8765
 echo.
 
 echo [1/2] starting backend (new window)...
-start "xiaozhubo-backend" cmd /k python -m backend.main
+start "" cmd /k "python -m backend.main"
 
 echo.
 echo [2/2] starting overlay frontend...

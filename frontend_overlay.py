@@ -30,9 +30,7 @@ ANIM_DURATION_APPEAR = 2000  # 出现+上升 毫秒
 ANIM_PAUSE = 4000  # 停留阅读时间 毫秒
 ANIM_DURATION_FADE = 2000  # 消失 毫秒
 FLOAT_UP_TOTAL = 250  # 总上升 px
-QUESTION_AREA_WIDTH = 420  # 显示区域宽度
-QUESTION_AREA_HEIGHT = 340  # 显示区域高度
-QUESTION_BOTTOM_MARGIN = 40  # 距底部边距
+
 
 # ── 从后端配置读取显示参数 ──
 import sys as _sys
@@ -47,10 +45,18 @@ try:
     DISPLAY_FONT_FAMILY = _cfg.DISPLAY_FONT_FAMILY
     DISPLAY_FONT_SIZE = _cfg.DISPLAY_FONT_SIZE
     DISABLE_EMOJI = _cfg.DISABLE_EMOJI
+    DISPLAY_X = _cfg.DISPLAY_X  # -1 = auto (right-bottom)
+    DISPLAY_Y = _cfg.DISPLAY_Y  # -1 = auto (right-bottom)
+    DISPLAY_WIDTH = _cfg.DISPLAY_WIDTH  # 420
+    DISPLAY_HEIGHT = _cfg.DISPLAY_HEIGHT  # 340
 except Exception:
     DISPLAY_FONT_FAMILY = "Microsoft YaHei UI, PingFang SC, sans-serif"
     DISPLAY_FONT_SIZE = 28
     DISABLE_EMOJI = False
+    DISPLAY_X = -1
+    DISPLAY_Y = -1
+    DISPLAY_WIDTH = 420
+    DISPLAY_HEIGHT = 340
     _SYSTEM_PROMPT = "（无法加载 LLM 提示词）"
 
 
@@ -73,7 +79,7 @@ class QuestionBubble(QtWidgets.QWidget):
         label = QtWidgets.QLabel(self)
         self.bubble_label = label
         label.setWordWrap(True)
-        label.setMaximumWidth(QUESTION_AREA_WIDTH - 40)
+        label.setMaximumWidth(DISPLAY_WIDTH - 40)
 
         html_text = (
             '<div style="'
@@ -89,7 +95,7 @@ class QuestionBubble(QtWidgets.QWidget):
         label.adjustSize()
 
         # 气泡尺寸
-        bw = min(label.width() + 40, QUESTION_AREA_WIDTH)
+        bw = min(label.width() + 40, DISPLAY_WIDTH)
         bh = max(label.height() + 30, 50)
         self.setFixedSize(bw, bh)
 
@@ -104,9 +110,15 @@ class QuestionBubble(QtWidgets.QWidget):
         self._opacity_effect.setOpacity(0.0)
         self.setGraphicsEffect(self._opacity_effect)
 
-        # 起始位置：右下角外面（不可见），终点是右下角可见区域
-        self._start_x = screen_geo.width() - bw - 30
-        self._start_y = screen_geo.height() - bh - QUESTION_BOTTOM_MARGIN
+        # 起始位置：从全局配置读取，-1 时默认右下角
+        if DISPLAY_X >= 0:
+            self._start_x = DISPLAY_X
+        else:
+            self._start_x = screen_geo.width() - bw - 30
+        if DISPLAY_Y >= 0:
+            self._start_y = DISPLAY_Y
+        else:
+            self._start_y = screen_geo.height() - bh - 40
         self._end_y = self._start_y - FLOAT_UP_TOTAL
 
         self.move(self._start_x, self._start_y)
@@ -244,7 +256,7 @@ def _create_tray_icon(app: QtWidgets.QApplication) -> QtWidgets.QSystemTrayIcon:
 
     # 设置：打开 SettingsDialog
     def _open_settings():
-        dialog = SettingsDialog(icon)
+        dialog = SettingsDialog()
         dialog.exec()
 
     settings_action.triggered.connect(_open_settings)
@@ -265,6 +277,232 @@ def _create_tray_icon(app: QtWidgets.QApplication) -> QtWidgets.QSystemTrayIcon:
     return icon
 
 
+class PositionEditor(QtWidgets.QWidget):
+    """弹窗位置编辑器 — 在缩略屏幕上拖拽绿色矩形调整位置和大小"""
+
+    EDGE_MARGIN = 8  # 边缘检测像素（缩放后坐标）
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(460, 260)
+        self._screen_geo = QtWidgets.QApplication.primaryScreen().geometry()
+        # 内部以屏幕坐标存储
+        self._rect_x = 0
+        self._rect_y = 0
+        self._rect_w = 200
+        self._rect_h = 160
+        self._dragging = False
+        self._resizing = False
+        self._resize_edge = None  # "n", "s", "w", "e", "nw", "ne", "sw", "se"
+        self._drag_offset_x = 0
+        self._drag_offset_y = 0
+        self._min_w = 100  # 最小屏幕像素宽
+        self._min_h = 60  # 最小屏幕像素高
+
+    @property
+    def _scale(self):
+        return min(
+            self.width() / self._screen_geo.width(),
+            self.height() / self._screen_geo.height(),
+        )
+
+    def _screen_to_widget(self, sx, sy):
+        s = self._scale
+        return int(sx * s), int(sy * s)
+
+    def _widget_to_screen(self, wx, wy):
+        s = self._scale
+        if s == 0:
+            return 0, 0
+        return int(wx / s), int(wy / s)
+
+    def _detect_edge(self, wx, wy):
+        """检测鼠标在 widget 坐标下是否在绿色矩形边缘，返回边名称或 None"""
+        s = self._scale
+        rx = int(self._rect_x * s)
+        ry = int(self._rect_y * s)
+        rw = max(int(self._rect_w * s), 1)
+        rh = max(int(self._rect_h * s), 1)
+        m = self.EDGE_MARGIN
+
+        on_left = abs(wx - rx) <= m
+        on_right = abs(wx - (rx + rw)) <= m
+        on_top = abs(wy - ry) <= m
+        on_bottom = abs(wy - (ry + rh)) <= m
+
+        if on_left and on_top:
+            return "nw"
+        if on_right and on_top:
+            return "ne"
+        if on_left and on_bottom:
+            return "sw"
+        if on_right and on_bottom:
+            return "se"
+        if on_left:
+            return "w"
+        if on_right:
+            return "e"
+        if on_top:
+            return "n"
+        if on_bottom:
+            return "s"
+        return None
+
+    def set_position(self, x, y, w, h):
+        """从屏幕坐标设置矩形位置"""
+        self._rect_x = x if x >= 0 else self._screen_geo.width() - w - 30
+        self._rect_y = y if y >= 0 else self._screen_geo.height() - h - 40
+        self._rect_w = w
+        self._rect_h = h
+        # 确保不越界
+        self._clamp_rect()
+        self.update()
+
+    def get_position(self):
+        """返回屏幕坐标 (x, y, w, h)"""
+        return self._rect_x, self._rect_y, self._rect_w, self._rect_h
+
+    def _clamp_rect(self):
+        """将矩形限制在屏幕范围内"""
+        sw, sh = self._screen_geo.width(), self._screen_geo.height()
+        self._rect_w = max(self._min_w, min(self._rect_w, sw))
+        self._rect_h = max(self._min_h, min(self._rect_h, sh))
+        self._rect_x = max(0, min(self._rect_x, sw - self._rect_w))
+        self._rect_y = max(0, min(self._rect_y, sh - self._rect_h))
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+        # 深色屏幕背景
+        painter.setBrush(QtGui.QColor("#2a2a2a"))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawRect(self.rect())
+
+        # 绿色矩形（缩放后坐标）
+        s = self._scale
+        rx = int(self._rect_x * s)
+        ry = int(self._rect_y * s)
+        rw = max(int(self._rect_w * s), 1)
+        rh = max(int(self._rect_h * s), 1)
+
+        # 半透明填充
+        painter.setBrush(QtGui.QColor(76, 175, 80, 80))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#4CAF50"), 2))
+        painter.drawRect(rx, ry, rw, rh)
+
+        # 内部文字
+        painter.setPen(QtGui.QColor(255, 255, 255, 200))
+        font = painter.font()
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.drawText(
+            QtCore.QRect(rx, ry, rw, rh),
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            "弹窗区域",
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+        wx, wy = event.position().x(), event.position().y()
+        edge = self._detect_edge(wx, wy)
+        if edge:
+            self._resizing = True
+            self._resize_edge = edge
+            s = self._scale
+            rx = int(self._rect_x * s)
+            ry = int(self._rect_y * s)
+            rw = max(int(self._rect_w * s), 1)
+            rh = max(int(self._rect_h * s), 1)
+            self._drag_offset_x = wx
+            self._drag_offset_y = wy
+            # 根据边缘记录起始矩形（widget 坐标）
+            self._resize_start = (rx, ry, rw, rh)
+            self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+        else:
+            # 检查是否在矩形内部
+            s = self._scale
+            rx = int(self._rect_x * s)
+            ry = int(self._rect_y * s)
+            rw = max(int(self._rect_w * s), 1)
+            rh = max(int(self._rect_h * s), 1)
+            if rx <= wx <= rx + rw and ry <= wy <= ry + rh:
+                self._dragging = True
+                self._drag_offset_x = wx - rx
+                self._drag_offset_y = wy - ry
+                self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+
+    def mouseMoveEvent(self, event):
+        wx, wy = event.position().x(), event.position().y()
+
+        if self._resizing and self._resize_edge:
+            s = self._scale
+            if s == 0:
+                return
+            sx0, sy0, sw0, sh0 = self._resize_start  # widget 坐标
+            # 转换偏移为 widget 坐标增量
+            dwx = wx - self._drag_offset_x
+            dwy = wy - self._drag_offset_y
+
+            new_rx, new_ry, new_rw, new_rh = sx0, sy0, sw0, sh0
+            edge = self._resize_edge
+
+            if "w" in edge:
+                new_rx = sx0 + dwx
+                new_rw = sw0 - dwx
+            if "e" in edge:
+                new_rw = sw0 + dwx
+            if "n" in edge:
+                new_ry = sy0 + dwy
+                new_rh = sh0 - dwy
+            if "s" in edge:
+                new_rh = sh0 + dwy
+
+            # 最小尺寸限制（widget 坐标）
+            min_w = max(int(self._min_w * s), 1)
+            min_h = max(int(self._min_h * s), 1)
+            if new_rw < min_w:
+                if "w" in edge:
+                    new_rx = sx0 + sw0 - min_w
+                new_rw = min_w
+            if new_rh < min_h:
+                if "n" in edge:
+                    new_ry = sy0 + sh0 - min_h
+                new_rh = min_h
+
+            # 转换回屏幕坐标
+            self._rect_x, _ = self._widget_to_screen(new_rx, new_ry)
+            self._rect_y = _
+            self._rect_w = max(int(new_rw / s), self._min_w)
+            self._rect_h = max(int(new_rh / s), self._min_h)
+            self._clamp_rect()
+            self.update()
+        elif self._dragging:
+            s = self._scale
+            new_rx = int(wx - self._drag_offset_x)
+            new_ry = int(wy - self._drag_offset_y)
+            self._rect_x, _ = self._widget_to_screen(new_rx, new_ry)
+            self._rect_y = _
+            self._clamp_rect()
+            self.update()
+        else:
+            # 更新光标形状
+            edge = self._detect_edge(wx, wy)
+            if edge:
+                self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+            else:
+                self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+        self._dragging = False
+        self._resizing = False
+        self._resize_edge = None
+        self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+
+
 class SettingsDialog(QtWidgets.QDialog):
     """设置对话框 — 修改字体、字号、emoji、触发词，并写回 config.yaml"""
 
@@ -273,7 +511,7 @@ class SettingsDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("小主播互动机 - 设置")
-        self.setFixedSize(500, 500)
+        self.setFixedSize(520, 700)
         self._build_ui()
         self._load_current_values()
 
@@ -309,6 +547,21 @@ class SettingsDialog(QtWidgets.QDialog):
 
         layout.addWidget(display_group)
 
+        # ── 弹窗位置 ──
+        pos_group = QtWidgets.QGroupBox("弹窗位置")
+        pos_layout = QtWidgets.QVBoxLayout(pos_group)
+
+        pos_hint = QtWidgets.QLabel("拖动绿色区域调整弹窗出现的位置和大小")
+        pos_hint.setStyleSheet("color: #888; font-size: 12px;")
+        pos_layout.addWidget(pos_hint)
+
+        self.pos_editor = PositionEditor()
+        pos_layout.addWidget(
+            self.pos_editor, alignment=QtCore.Qt.AlignmentFlag.AlignCenter
+        )
+
+        layout.addWidget(pos_group)
+
         # ── 截断提示词 ──
         trigger_group = QtWidgets.QGroupBox("截断提示词")
         trigger_layout = QtWidgets.QVBoxLayout(trigger_group)
@@ -335,7 +588,6 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.prompt_edit = QtWidgets.QTextEdit()
         self.prompt_edit.setReadOnly(True)
-        self.prompt_edit.setStyleSheet("background-color: #f5f5f5;")
         llm_layout.addWidget(self.prompt_edit)
 
         layout.addWidget(llm_group)
@@ -355,6 +607,7 @@ class SettingsDialog(QtWidgets.QDialog):
     def _load_current_values(self):
         """从当前全局变量加载值到 UI 控件"""
         global DISPLAY_FONT_FAMILY, DISPLAY_FONT_SIZE, DISABLE_EMOJI
+        global DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
 
         # 字体 — 匹配或添加自定义值
         idx = self.font_combo.findText(DISPLAY_FONT_FAMILY)
@@ -373,9 +626,15 @@ class SettingsDialog(QtWidgets.QDialog):
         # LLM 提示词
         self.prompt_edit.setPlainText(_SYSTEM_PROMPT)
 
+        # 弹窗位置
+        self.pos_editor.set_position(
+            DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
+        )
+
     def _on_save(self):
         """保存设置：更新全局变量 + 写回 config.yaml"""
         global DISPLAY_FONT_FAMILY, DISPLAY_FONT_SIZE, DISABLE_EMOJI
+        global DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
 
         # 1. 读取值
         font_family = self.font_combo.currentText().strip()
@@ -383,13 +642,22 @@ class SettingsDialog(QtWidgets.QDialog):
         disable_emoji = self.emoji_check.isChecked()
         trigger_lines = self.trigger_edit.toPlainText().strip().splitlines()
         trigger_phrases = [line.strip() for line in trigger_lines if line.strip()]
+        pos_x, pos_y, pos_w, pos_h = self.pos_editor.get_position()
 
         # 2. 更新运行时全局变量
         DISPLAY_FONT_FAMILY = font_family
         DISPLAY_FONT_SIZE = font_size
         DISABLE_EMOJI = disable_emoji
+        DISPLAY_X = pos_x
+        DISPLAY_Y = pos_y
+        DISPLAY_WIDTH = pos_w
+        DISPLAY_HEIGHT = pos_h
         if hasattr(_cfg, "TRIGGER_PHRASES"):
             _cfg.TRIGGER_PHRASES = trigger_phrases
+        _cfg.DISPLAY_X = pos_x
+        _cfg.DISPLAY_Y = pos_y
+        _cfg.DISPLAY_WIDTH = pos_w
+        _cfg.DISPLAY_HEIGHT = pos_h
 
         # 3. 写回 config.yaml
         try:
@@ -400,6 +668,10 @@ class SettingsDialog(QtWidgets.QDialog):
             cfg["DISPLAY_FONT_FAMILY"] = font_family
             cfg["DISPLAY_FONT_SIZE"] = font_size
             cfg["DISABLE_EMOJI"] = disable_emoji
+            cfg["DISPLAY_X"] = pos_x
+            cfg["DISPLAY_Y"] = pos_y
+            cfg["DISPLAY_WIDTH"] = pos_w
+            cfg["DISPLAY_HEIGHT"] = pos_h
             cfg["TRIGGER_PHRASES"] = trigger_phrases
 
             with open(config_path, "w", encoding="utf-8") as f:
@@ -415,8 +687,9 @@ class SettingsDialog(QtWidgets.QDialog):
             log.warning(f"写入 config.yaml 失败: {exc}")
 
         # 4. 确认
-        if isinstance(self.parent(), QtWidgets.QSystemTrayIcon):
-            self.parent().showMessage(
+        tray = QtWidgets.QApplication.instance().property("tray_icon")
+        if tray and isinstance(tray, QtWidgets.QSystemTrayIcon):
+            tray.showMessage(
                 "小主播互动机",
                 "设置已保存",
                 QtWidgets.QSystemTrayIcon.MessageIcon.Information,
@@ -529,6 +802,7 @@ def main():
     # ── 系统托盘图标 ──
     tray = _create_tray_icon(app)
     tray.show()
+    app.setProperty("tray_icon", tray)
 
     # ── asyncio 集成：用 QTimer 驱动 asyncio 事件循环 ──
     # 每次 QTimer 触发，运行 asyncio 事件循环直到没有待处理事件

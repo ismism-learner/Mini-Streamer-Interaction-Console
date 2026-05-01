@@ -51,6 +51,10 @@ class Config:
         )
         self.DISPLAY_FONT_SIZE = cfg.get("DISPLAY_FONT_SIZE", 28)
         self.DISABLE_EMOJI = cfg.get("DISABLE_EMOJI", False)
+        self.DISPLAY_X = cfg.get("DISPLAY_X", -1)
+        self.DISPLAY_Y = cfg.get("DISPLAY_Y", -1)
+        self.DISPLAY_WIDTH = cfg.get("DISPLAY_WIDTH", 420)
+        self.DISPLAY_HEIGHT = cfg.get("DISPLAY_HEIGHT", 340)
 
         # STT 配置
         self.WHISPER_MODEL_SIZE = cfg.get("WHISPER_MODEL_SIZE", "small")
