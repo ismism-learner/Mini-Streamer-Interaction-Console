@@ -185,6 +185,12 @@ class QuestionBubble(QtWidgets.QWidget):
             self._ctrl_dragging = True
             self._ctrl_drag_offset = event.position().toPoint()
             self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+            # 暂停动画，否则 geometry 动画会覆盖拖动
+            if (
+                hasattr(self, "_anim_group")
+                and self._anim_group.state() == QtCore.QAbstractAnimation.State.Running
+            ):
+                self._anim_group.pause()
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -195,10 +201,6 @@ class QuestionBubble(QtWidgets.QWidget):
             delta = event.position().toPoint() - self._ctrl_drag_offset
             new_pos = self.pos() + delta
             self.move(new_pos)
-            # 更新全局位置
-            global DISPLAY_X, DISPLAY_Y
-            DISPLAY_X = new_pos.x()
-            DISPLAY_Y = new_pos.y()
             event.accept()
         else:
             super().mouseMoveEvent(event)
@@ -208,10 +210,22 @@ class QuestionBubble(QtWidgets.QWidget):
         if self._ctrl_dragging:
             self._ctrl_dragging = False
             self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-            # 写回 config.yaml
+            # 更新全局位置
             global DISPLAY_X, DISPLAY_Y
+            DISPLAY_X = self.pos().x()
+            DISPLAY_Y = self.pos().y()
             _cfg.DISPLAY_X = DISPLAY_X
             _cfg.DISPLAY_Y = DISPLAY_Y
+            # 从当前位置恢复动画
+            if (
+                hasattr(self, "_anim_group")
+                and self._anim_group.state() == QtCore.QAbstractAnimation.State.Paused
+            ):
+                # 更新动画的起始位置为当前位置
+                self._start_x = self.pos().x()
+                self._start_y = self.pos().y()
+                self._anim_group.resume()
+            # 写回 config.yaml（仅release时写一次）
             try:
                 config_path = Path(__file__).parent / "config.yaml"
                 with open(config_path, "r", encoding="utf-8") as f:
