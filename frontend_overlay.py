@@ -432,8 +432,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.chars_per_line_spin = QtWidgets.QSpinBox()
         self.chars_per_line_spin.setRange(4, 40)
-        self.chars_per_line_spin.setSuffix(" 字")
-        display_layout.addRow("一行显示字数:", self.chars_per_line_spin)
+        display_layout.addRow("长度:", self.chars_per_line_spin)
 
         layout.addWidget(display_group)
 
