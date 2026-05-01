@@ -312,11 +312,11 @@ def _create_tray_icon(app: QtWidgets.QApplication) -> QtWidgets.QSystemTrayIcon:
 class PositionEditor(QtWidgets.QWidget):
     """弹窗位置编辑器 — 在缩略屏幕上拖拽绿色矩形调整位置和大小"""
 
-    EDGE_MARGIN = 8  # 边缘检测像素（缩放后坐标）
+    EDGE_MARGIN = 10  # 边缘检测像素（缩放后坐标）
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(460, 260)
+        self.setFixedSize(480, 300)
         self._screen_geo = QtWidgets.QApplication.primaryScreen().geometry()
         # 内部以屏幕坐标存储
         self._rect_x = 0
@@ -333,28 +333,38 @@ class PositionEditor(QtWidgets.QWidget):
 
     @property
     def _scale(self):
+        """缩放比例，留 20px 内边距"""
+        pad = 20
         return min(
-            self.width() / self._screen_geo.width(),
-            self.height() / self._screen_geo.height(),
+            (self.width() - pad * 2) / self._screen_geo.width(),
+            (self.height() - pad * 2) / self._screen_geo.height(),
         )
+
+    @property
+    def _offset(self):
+        """缩略图在 widget 中的偏移量（居中）"""
+        s = self._scale
+        sw = self._screen_geo.width() * s
+        sh = self._screen_geo.height() * s
+        return (self.width() - sw) / 2, (self.height() - sh) / 2
 
     def _screen_to_widget(self, sx, sy):
         s = self._scale
-        return int(sx * s), int(sy * s)
+        ox, oy = self._offset
+        return int(sx * s + ox), int(sy * s + oy)
 
     def _widget_to_screen(self, wx, wy):
         s = self._scale
+        ox, oy = self._offset
         if s == 0:
             return 0, 0
-        return int(wx / s), int(wy / s)
+        return int((wx - ox) / s), int((wy - oy) / s)
 
     def _detect_edge(self, wx, wy):
         """检测鼠标在 widget 坐标下是否在绿色矩形边缘，返回边名称或 None"""
-        s = self._scale
-        rx = int(self._rect_x * s)
-        ry = int(self._rect_y * s)
-        rw = max(int(self._rect_w * s), 1)
-        rh = max(int(self._rect_h * s), 1)
+        rx, ry = self._screen_to_widget(self._rect_x, self._rect_y)
+        rw = max(int(self._rect_w * self._scale), 1)
+        rh = max(int(self._rect_h * self._scale), 1)
         m = self.EDGE_MARGIN
 
         on_left = abs(wx - rx) <= m
@@ -406,15 +416,22 @@ class PositionEditor(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
-        # 深色屏幕背景
-        painter.setBrush(QtGui.QColor("#2a2a2a"))
+        # 整体背景
+        painter.setBrush(QtGui.QColor("#1e1e1e"))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawRect(self.rect())
 
-        # 绿色矩形（缩放后坐标）
+        # 屏幕缩略图区域（带边框）
         s = self._scale
-        rx = int(self._rect_x * s)
-        ry = int(self._rect_y * s)
+        ox, oy = self._offset
+        sw = int(self._screen_geo.width() * s)
+        sh = int(self._screen_geo.height() * s)
+        painter.setBrush(QtGui.QColor("#2a2a2a"))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#555555"), 1))
+        painter.drawRect(int(ox), int(oy), sw, sh)
+
+        # 绿色矩形（缩放后坐标）
+        rx, ry = self._screen_to_widget(self._rect_x, self._rect_y)
         rw = max(int(self._rect_w * s), 1)
         rh = max(int(self._rect_h * s), 1)
 
@@ -434,6 +451,19 @@ class PositionEditor(QtWidgets.QWidget):
             "弹窗区域",
         )
 
+        # 屏幕分辨率标注
+        painter.setPen(QtGui.QColor("#888888"))
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.drawText(
+            int(ox),
+            int(oy + sh + 2),
+            sw,
+            16,
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            f"{self._screen_geo.width()}x{self._screen_geo.height()}",
+        )
+
     def mousePressEvent(self, event):
         if event.button() != QtCore.Qt.MouseButton.LeftButton:
             return
@@ -442,11 +472,9 @@ class PositionEditor(QtWidgets.QWidget):
         if edge:
             self._resizing = True
             self._resize_edge = edge
-            s = self._scale
-            rx = int(self._rect_x * s)
-            ry = int(self._rect_y * s)
-            rw = max(int(self._rect_w * s), 1)
-            rh = max(int(self._rect_h * s), 1)
+            rx, ry = self._screen_to_widget(self._rect_x, self._rect_y)
+            rw = max(int(self._rect_w * self._scale), 1)
+            rh = max(int(self._rect_h * self._scale), 1)
             self._drag_offset_x = wx
             self._drag_offset_y = wy
             # 根据边缘记录起始矩形（widget 坐标）
@@ -454,11 +482,9 @@ class PositionEditor(QtWidgets.QWidget):
             self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
         else:
             # 检查是否在矩形内部
-            s = self._scale
-            rx = int(self._rect_x * s)
-            ry = int(self._rect_y * s)
-            rw = max(int(self._rect_w * s), 1)
-            rh = max(int(self._rect_h * s), 1)
+            rx, ry = self._screen_to_widget(self._rect_x, self._rect_y)
+            rw = max(int(self._rect_w * self._scale), 1)
+            rh = max(int(self._rect_h * self._scale), 1)
             if rx <= wx <= rx + rw and ry <= wy <= ry + rh:
                 self._dragging = True
                 self._drag_offset_x = wx - rx
@@ -504,18 +530,15 @@ class PositionEditor(QtWidgets.QWidget):
                 new_rh = min_h
 
             # 转换回屏幕坐标
-            self._rect_x, _ = self._widget_to_screen(new_rx, new_ry)
-            self._rect_y = _
+            self._rect_x, self._rect_y = self._widget_to_screen(new_rx, new_ry)
             self._rect_w = max(int(new_rw / s), self._min_w)
             self._rect_h = max(int(new_rh / s), self._min_h)
             self._clamp_rect()
             self.update()
         elif self._dragging:
-            s = self._scale
             new_rx = int(wx - self._drag_offset_x)
             new_ry = int(wy - self._drag_offset_y)
-            self._rect_x, _ = self._widget_to_screen(new_rx, new_ry)
-            self._rect_y = _
+            self._rect_x, self._rect_y = self._widget_to_screen(new_rx, new_ry)
             self._clamp_rect()
             self.update()
         else:
