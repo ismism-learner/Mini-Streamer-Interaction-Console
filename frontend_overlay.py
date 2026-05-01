@@ -27,7 +27,6 @@ log = logging.getLogger("overlay")
 WS_URL = "ws://127.0.0.1:8765/ws"
 RECONNECT_INTERVAL = 3  # 秒
 ANIM_DURATION_APPEAR = 2000  # 出现+上升 毫秒
-ANIM_PAUSE = 4000  # 停留阅读时间 毫秒
 ANIM_DURATION_FADE = 2000  # 消失 毫秒
 FLOAT_UP_TOTAL = 250  # 总上升 px
 
@@ -49,6 +48,8 @@ try:
     DISPLAY_Y = _cfg.DISPLAY_Y  # -1 = auto (right-bottom)
     DISPLAY_WIDTH = _cfg.DISPLAY_WIDTH  # 420
     DISPLAY_HEIGHT = _cfg.DISPLAY_HEIGHT  # 340
+    DISPLAY_DISAPPEAR_MODE = _cfg.DISPLAY_DISAPPEAR_MODE  # timed/keep/stack
+    DISPLAY_DISAPPEAR_SECONDS = _cfg.DISPLAY_DISAPPEAR_SECONDS  # seconds
 except Exception:
     DISPLAY_FONT_FAMILY = "Microsoft YaHei UI, PingFang SC, sans-serif"
     DISPLAY_FONT_SIZE = 28
@@ -57,15 +58,32 @@ except Exception:
     DISPLAY_Y = -1
     DISPLAY_WIDTH = 420
     DISPLAY_HEIGHT = 340
+    DISPLAY_DISAPPEAR_MODE = "timed"
+    DISPLAY_DISAPPEAR_SECONDS = 4
     _SYSTEM_PROMPT = "（无法加载 LLM 提示词）"
 
 
 class QuestionBubble(QtWidgets.QWidget):
-    """单个问题气泡 — 自动执行 出现→停留→消失 动画"""
+    """单个问题气泡 — 自动执行 出现→停留→消失 动画
 
-    def __init__(self, text: str, screen_geo: QtCore.QRect, parent=None):
+    disappear_mode:
+      - "timed": 出现后停留 N 秒自动消失
+      - "keep":  一直保留，直到外部调用 force_fade_out()
+      - "stack": 停留 N 秒消失，多个可同时存在
+    """
+
+    def __init__(
+        self,
+        text: str,
+        screen_geo: QtCore.QRect,
+        disappear_mode: str = "timed",
+        disappear_seconds: int = 4,
+        parent=None,
+    ):
         super().__init__(parent)
         self.screen_geo = screen_geo
+        self._disappear_mode = disappear_mode
+        self._disappear_seconds = disappear_seconds
         self.setWindowFlags(
             QtCore.Qt.WindowType.FramelessWindowHint
             | QtCore.Qt.WindowType.WindowStaysOnTopHint
@@ -173,8 +191,22 @@ class QuestionBubble(QtWidgets.QWidget):
         if self._anim_phase != 1:
             return
         self._anim_phase = 2
-        # 停留
-        QtCore.QTimer.singleShot(ANIM_PAUSE, self._run_fade)
+        if self._disappear_mode == "keep":
+            # 保留模式：不自动消失，等外部调用 force_fade_out()
+            pass
+        else:
+            # timed / stack: 停留 N 秒后消失
+            pause_ms = int(self._disappear_seconds * 1000)
+            QtCore.QTimer.singleShot(pause_ms, self._run_fade)
+
+    def force_fade_out(self):
+        """外部调用：强制淡出（用于 keep 模式下新问题替换旧问题）"""
+        if self._anim_phase == 2:
+            self._run_fade()
+        elif self._anim_phase == 1:
+            # 还在出现动画中，等出现完再淡出
+            self._anim_phase = 2
+            self._run_fade()
 
     def _run_fade(self):
         """阶段3：消失 — 继续上升 + 淡出"""
@@ -545,6 +577,18 @@ class SettingsDialog(QtWidgets.QDialog):
         self.emoji_check = QtWidgets.QCheckBox("禁用 emoji")
         display_layout.addRow(self.emoji_check)
 
+        # 消失模式
+        self.disappear_combo = QtWidgets.QComboBox()
+        self.disappear_combo.addItem("定时消失", "timed")
+        self.disappear_combo.addItem("保留到新问题出现", "keep")
+        self.disappear_combo.addItem("堆叠显示", "stack")
+        display_layout.addRow("消失模式:", self.disappear_combo)
+
+        self.disappear_spin = QtWidgets.QSpinBox()
+        self.disappear_spin.setRange(1, 30)
+        self.disappear_spin.setSuffix(" 秒")
+        display_layout.addRow("停留时间:", self.disappear_spin)
+
         layout.addWidget(display_group)
 
         # ── 弹窗位置 ──
@@ -619,6 +663,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self.font_spin.setValue(DISPLAY_FONT_SIZE)
         self.emoji_check.setChecked(DISABLE_EMOJI)
 
+        # 消失模式
+        idx = self.disappear_combo.findData(DISPLAY_DISAPPEAR_MODE)
+        if idx >= 0:
+            self.disappear_combo.setCurrentIndex(idx)
+        self.disappear_spin.setValue(DISPLAY_DISAPPEAR_SECONDS)
+
         # 触发词
         if hasattr(_cfg, "TRIGGER_PHRASES"):
             self.trigger_edit.setPlainText("\n".join(_cfg.TRIGGER_PHRASES))
@@ -635,11 +685,14 @@ class SettingsDialog(QtWidgets.QDialog):
         """保存设置：更新全局变量 + 写回 config.yaml"""
         global DISPLAY_FONT_FAMILY, DISPLAY_FONT_SIZE, DISABLE_EMOJI
         global DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
+        global DISPLAY_DISAPPEAR_MODE, DISPLAY_DISAPPEAR_SECONDS
 
         # 1. 读取值
         font_family = self.font_combo.currentText().strip()
         font_size = self.font_spin.value()
         disable_emoji = self.emoji_check.isChecked()
+        disappear_mode = self.disappear_combo.currentData()
+        disappear_seconds = self.disappear_spin.value()
         trigger_lines = self.trigger_edit.toPlainText().strip().splitlines()
         trigger_phrases = [line.strip() for line in trigger_lines if line.strip()]
         pos_x, pos_y, pos_w, pos_h = self.pos_editor.get_position()
@@ -652,12 +705,16 @@ class SettingsDialog(QtWidgets.QDialog):
         DISPLAY_Y = pos_y
         DISPLAY_WIDTH = pos_w
         DISPLAY_HEIGHT = pos_h
+        DISPLAY_DISAPPEAR_MODE = disappear_mode
+        DISPLAY_DISAPPEAR_SECONDS = disappear_seconds
         if hasattr(_cfg, "TRIGGER_PHRASES"):
             _cfg.TRIGGER_PHRASES = trigger_phrases
         _cfg.DISPLAY_X = pos_x
         _cfg.DISPLAY_Y = pos_y
         _cfg.DISPLAY_WIDTH = pos_w
         _cfg.DISPLAY_HEIGHT = pos_h
+        _cfg.DISPLAY_DISAPPEAR_MODE = disappear_mode
+        _cfg.DISPLAY_DISAPPEAR_SECONDS = disappear_seconds
 
         # 3. 写回 config.yaml
         try:
@@ -672,6 +729,8 @@ class SettingsDialog(QtWidgets.QDialog):
             cfg["DISPLAY_Y"] = pos_y
             cfg["DISPLAY_WIDTH"] = pos_w
             cfg["DISPLAY_HEIGHT"] = pos_h
+            cfg["DISPLAY_DISAPPEAR_MODE"] = disappear_mode
+            cfg["DISPLAY_DISAPPEAR_SECONDS"] = disappear_seconds
             cfg["TRIGGER_PHRASES"] = trigger_phrases
 
             with open(config_path, "w", encoding="utf-8") as f:
@@ -724,6 +783,9 @@ class OverlayWindow(QtWidgets.QWidget):
         self._reconnect_timer = QtCore.QTimer(self)
         self._reconnect_timer.setSingleShot(True)
         self._reconnect_timer.timeout.connect(self._start_ws)
+
+        # 当前活跃的气泡列表（用于 keep 模式替换）
+        self._active_bubbles = []
 
         self._start_ws()
 
@@ -779,7 +841,25 @@ class OverlayWindow(QtWidgets.QWidget):
     @QtCore.Slot(str)
     def _show_question(self, text: str):
         """在主线程中创建问题气泡"""
-        bubble = QuestionBubble(text, self.screen_geo, self)
+        mode = DISPLAY_DISAPPEAR_MODE
+        seconds = DISPLAY_DISAPPEAR_SECONDS
+
+        # keep 模式：新问题出现时，旧问题立即淡出
+        if mode == "keep":
+            for old_bubble in self._active_bubbles:
+                old_bubble.force_fade_out()
+            self._active_bubbles.clear()
+
+        bubble = QuestionBubble(
+            text,
+            self.screen_geo,
+            disappear_mode=mode,
+            disappear_seconds=seconds,
+            parent=self,
+        )
+
+        if mode == "keep":
+            self._active_bubbles.append(bubble)
 
     def _schedule_reconnect(self):
         """安排重连（备用路径）"""

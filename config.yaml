@@ -21,6 +21,9 @@ DISPLAY_X: -1  # -1 表示自动：默认右下角
 DISPLAY_Y: -1  # -1 表示自动：默认右下角
 DISPLAY_WIDTH: 420
 DISPLAY_HEIGHT: 340
+# 消失模式: timed=定时消失, keep=保留到新问题出现, stack=堆叠显示
+DISPLAY_DISAPPEAR_MODE: timed
+DISPLAY_DISAPPEAR_SECONDS: 4  # timed 模式下的停留秒数
 WHISPER_MODEL_SIZE: small
 WHISPER_DEVICE: cpu
 WHISPER_COMPUTE_TYPE: int8

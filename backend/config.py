@@ -55,6 +55,8 @@ class Config:
         self.DISPLAY_Y = cfg.get("DISPLAY_Y", -1)
         self.DISPLAY_WIDTH = cfg.get("DISPLAY_WIDTH", 420)
         self.DISPLAY_HEIGHT = cfg.get("DISPLAY_HEIGHT", 340)
+        self.DISPLAY_DISAPPEAR_MODE = cfg.get("DISPLAY_DISAPPEAR_MODE", "timed")
+        self.DISPLAY_DISAPPEAR_SECONDS = cfg.get("DISPLAY_DISAPPEAR_SECONDS", 4)
 
         # STT 配置
         self.WHISPER_MODEL_SIZE = cfg.get("WHISPER_MODEL_SIZE", "small")
