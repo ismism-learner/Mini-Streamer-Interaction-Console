@@ -250,7 +250,7 @@ class QuestionBubble(QtWidgets.QWidget):
     # ── 动画阶段 ──────────────────────────────────────
 
     def _run_appear(self):
-        """阶段1：出现 — 透明→不透明 + 上升"""
+        """阶段1：出现 — 透明→不透明（独立窗口不需要上升动画）"""
         self._anim_phase = 1
         opacity_anim = QtCore.QPropertyAnimation(self._opacity_effect, b"opacity")
         opacity_anim.setDuration(ANIM_DURATION_APPEAR)
@@ -258,24 +258,8 @@ class QuestionBubble(QtWidgets.QWidget):
         opacity_anim.setEndValue(1.0)
         opacity_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
 
-        move_anim = QtCore.QPropertyAnimation(self, b"geometry")
-        move_anim.setDuration(ANIM_DURATION_APPEAR)
-        start_geo = QtCore.QRect(
-            self._start_x, self._start_y, self.width(), self.height()
-        )
-        mid_geo = QtCore.QRect(
-            self._start_x,
-            self._start_y - FLOAT_UP_TOTAL,
-            self.width(),
-            self.height(),
-        )
-        move_anim.setStartValue(start_geo)
-        move_anim.setEndValue(mid_geo)
-        move_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
-
         self._anim_group = QtCore.QParallelAnimationGroup(self)
         self._anim_group.addAnimation(opacity_anim)
-        self._anim_group.addAnimation(move_anim)
         self._anim_group.finished.connect(self._on_appear_done)
         self._anim_group.start()
 
@@ -301,7 +285,7 @@ class QuestionBubble(QtWidgets.QWidget):
             self._run_fade()
 
     def _run_fade(self):
-        """阶段3：消失 — 继续上升 + 淡出"""
+        """阶段3：消失 — 淡出（独立窗口不需要上升）"""
         if self._anim_phase != 2:
             return
         self._anim_phase = 3
@@ -312,22 +296,8 @@ class QuestionBubble(QtWidgets.QWidget):
         opacity_anim.setEndValue(0.0)
         opacity_anim.setEasingCurve(QtCore.QEasingCurve.Type.InCubic)
 
-        move_anim = QtCore.QPropertyAnimation(self, b"geometry")
-        move_anim.setDuration(ANIM_DURATION_FADE)
-        current = self.geometry()
-        end_geo = QtCore.QRect(
-            current.x(),
-            current.y() - 100,
-            self.width(),
-            self.height(),
-        )
-        move_anim.setStartValue(current)
-        move_anim.setEndValue(end_geo)
-        move_anim.setEasingCurve(QtCore.QEasingCurve.Type.InCubic)
-
         g = QtCore.QParallelAnimationGroup(self)
         g.addAnimation(opacity_anim)
-        g.addAnimation(move_anim)
         g.finished.connect(self._on_fade_done)
         g.start()
 
