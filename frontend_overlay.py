@@ -11,7 +11,9 @@ import asyncio
 import json
 import logging
 import sys
+from pathlib import Path
 
+import yaml
 from PySide6 import QtCore, QtGui, QtWidgets
 
 logging.basicConfig(
@@ -40,6 +42,7 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).parent))
 try:
     from backend.config import config as _cfg
+    from backend.llm import QUESTION_SYSTEM_PROMPT as _SYSTEM_PROMPT
 
     DISPLAY_FONT_FAMILY = _cfg.DISPLAY_FONT_FAMILY
     DISPLAY_FONT_SIZE = _cfg.DISPLAY_FONT_SIZE
@@ -48,6 +51,7 @@ except Exception:
     DISPLAY_FONT_FAMILY = "Microsoft YaHei UI, PingFang SC, sans-serif"
     DISPLAY_FONT_SIZE = 28
     DISABLE_EMOJI = False
+    _SYSTEM_PROMPT = "（无法加载 LLM 提示词）"
 
 
 class QuestionBubble(QtWidgets.QWidget):
@@ -207,6 +211,221 @@ def _escape_html(text: str) -> str:
     )
 
 
+# ── 全局引用（供设置对话框修改） ──
+_global_overlay_window = None
+
+
+def _create_tray_icon(app: QtWidgets.QApplication) -> QtWidgets.QSystemTrayIcon:
+    """创建系统托盘图标（32x32 程序绘制，不依赖外部文件）"""
+    pixmap = QtGui.QPixmap(32, 32)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    # 渐变色圆圈
+    gradient = QtGui.QRadialGradient(16, 16, 16, 10, 10)
+    gradient.setColorAt(0.0, QtGui.QColor(255, 100, 100))
+    gradient.setColorAt(0.7, QtGui.QColor(220, 40, 40))
+    gradient.setColorAt(1.0, QtGui.QColor(160, 20, 20))
+    painter.setBrush(QtGui.QBrush(gradient))
+    painter.setPen(QtCore.Qt.PenStyle.NoPen)
+    painter.drawEllipse(2, 2, 28, 28)
+    # 白色高光
+    painter.setBrush(QtGui.QColor(255, 255, 255, 80))
+    painter.drawEllipse(8, 6, 8, 6)
+    painter.end()
+
+    icon = QtWidgets.QSystemTrayIcon(QtGui.QIcon(pixmap))
+    icon.setToolTip("小主播互动机")
+
+    # ── 右键菜单 ──
+    menu = QtWidgets.QMenu()
+    settings_action = menu.addAction("设置(S)")
+    quit_action = menu.addAction("退出(Q)")
+
+    # 设置：打开 SettingsDialog
+    def _open_settings():
+        dialog = SettingsDialog(icon)
+        dialog.exec()
+
+    settings_action.triggered.connect(_open_settings)
+
+    # 退出
+    quit_action.triggered.connect(app.quit)
+
+    # 双击图标也打开设置
+    icon.activated.connect(
+        lambda reason: (
+            _open_settings()
+            if reason == QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick
+            else None
+        )
+    )
+
+    icon.setContextMenu(menu)
+    return icon
+
+
+class SettingsDialog(QtWidgets.QDialog):
+    """设置对话框 — 修改字体、字号、emoji、触发词，并写回 config.yaml"""
+
+    CONFIG_PATH = Path(__file__).parent / "config.yaml"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("小主播互动机 - 设置")
+        self.setFixedSize(500, 500)
+        self._build_ui()
+        self._load_current_values()
+
+    def _build_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # ── 显示设置 ──
+        display_group = QtWidgets.QGroupBox("显示设置")
+        display_layout = QtWidgets.QFormLayout(display_group)
+
+        self.font_combo = QtWidgets.QComboBox()
+        chinese_fonts = [
+            "Microsoft YaHei UI",
+            "SimHei",
+            "SimSun",
+            "KaiTi",
+            "FangSong",
+            "PingFang SC",
+            "Noto Sans SC",
+        ]
+        for f in chinese_fonts:
+            self.font_combo.addItem(f)
+        self.font_combo.setEditable(True)
+        display_layout.addRow("字体:", self.font_combo)
+
+        self.font_spin = QtWidgets.QSpinBox()
+        self.font_spin.setRange(12, 72)
+        display_layout.addRow("字号:", self.font_spin)
+
+        self.emoji_check = QtWidgets.QCheckBox("禁用 emoji")
+        display_layout.addRow(self.emoji_check)
+
+        layout.addWidget(display_group)
+
+        # ── 截断提示词 ──
+        trigger_group = QtWidgets.QGroupBox("截断提示词")
+        trigger_layout = QtWidgets.QVBoxLayout(trigger_group)
+
+        hint = QtWidgets.QLabel("每行一个提示词，主播说到这些词时立即触发提问")
+        hint.setStyleSheet("color: #888; font-size: 12px;")
+        trigger_layout.addWidget(hint)
+
+        self.trigger_edit = QtWidgets.QTextEdit()
+        self.trigger_edit.setPlaceholderText("你明白了吗\n听懂了吗\n…")
+        trigger_layout.addWidget(self.trigger_edit)
+
+        layout.addWidget(trigger_group)
+
+        # ── LLM 提示词 ──
+        llm_group = QtWidgets.QGroupBox("LLM 提示词")
+        llm_layout = QtWidgets.QVBoxLayout(llm_group)
+
+        llm_hint = QtWidgets.QLabel(
+            "当前 LLM 系统提示词（只读，可在 backend/llm.py 中修改）"
+        )
+        llm_hint.setStyleSheet("color: #888; font-size: 12px;")
+        llm_layout.addWidget(llm_hint)
+
+        self.prompt_edit = QtWidgets.QTextEdit()
+        self.prompt_edit.setReadOnly(True)
+        self.prompt_edit.setStyleSheet("background-color: #f5f5f5;")
+        llm_layout.addWidget(self.prompt_edit)
+
+        layout.addWidget(llm_group)
+
+        # ── 按钮 ──
+        btn_layout = QtWidgets.QHBoxLayout()
+        btn_layout.addStretch()
+        save_btn = QtWidgets.QPushButton("保存")
+        cancel_btn = QtWidgets.QPushButton("取消")
+        btn_layout.addWidget(save_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        save_btn.clicked.connect(self._on_save)
+        cancel_btn.clicked.connect(self.reject)
+
+    def _load_current_values(self):
+        """从当前全局变量加载值到 UI 控件"""
+        global DISPLAY_FONT_FAMILY, DISPLAY_FONT_SIZE, DISABLE_EMOJI
+
+        # 字体 — 匹配或添加自定义值
+        idx = self.font_combo.findText(DISPLAY_FONT_FAMILY)
+        if idx >= 0:
+            self.font_combo.setCurrentIndex(idx)
+        else:
+            self.font_combo.setCurrentText(DISPLAY_FONT_FAMILY)
+
+        self.font_spin.setValue(DISPLAY_FONT_SIZE)
+        self.emoji_check.setChecked(DISABLE_EMOJI)
+
+        # 触发词
+        if hasattr(_cfg, "TRIGGER_PHRASES"):
+            self.trigger_edit.setPlainText("\n".join(_cfg.TRIGGER_PHRASES))
+
+        # LLM 提示词
+        self.prompt_edit.setPlainText(_SYSTEM_PROMPT)
+
+    def _on_save(self):
+        """保存设置：更新全局变量 + 写回 config.yaml"""
+        global DISPLAY_FONT_FAMILY, DISPLAY_FONT_SIZE, DISABLE_EMOJI
+
+        # 1. 读取值
+        font_family = self.font_combo.currentText().strip()
+        font_size = self.font_spin.value()
+        disable_emoji = self.emoji_check.isChecked()
+        trigger_lines = self.trigger_edit.toPlainText().strip().splitlines()
+        trigger_phrases = [line.strip() for line in trigger_lines if line.strip()]
+
+        # 2. 更新运行时全局变量
+        DISPLAY_FONT_FAMILY = font_family
+        DISPLAY_FONT_SIZE = font_size
+        DISABLE_EMOJI = disable_emoji
+        if hasattr(_cfg, "TRIGGER_PHRASES"):
+            _cfg.TRIGGER_PHRASES = trigger_phrases
+
+        # 3. 写回 config.yaml
+        try:
+            config_path = self.CONFIG_PATH
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+
+            cfg["DISPLAY_FONT_FAMILY"] = font_family
+            cfg["DISPLAY_FONT_SIZE"] = font_size
+            cfg["DISABLE_EMOJI"] = disable_emoji
+            cfg["TRIGGER_PHRASES"] = trigger_phrases
+
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(
+                    cfg,
+                    f,
+                    allow_unicode=True,
+                    default_flow_style=False,
+                    sort_keys=False,
+                )
+
+        except Exception as exc:
+            log.warning(f"写入 config.yaml 失败: {exc}")
+
+        # 4. 确认
+        if isinstance(self.parent(), QtWidgets.QSystemTrayIcon):
+            self.parent().showMessage(
+                "小主播互动机",
+                "设置已保存",
+                QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
+        log.info("设置已保存")
+        self.accept()
+
+
 class OverlayWindow(QtWidgets.QWidget):
     """透明覆盖层主窗口 — 占据全屏但鼠标穿透"""
 
@@ -297,11 +516,19 @@ class OverlayWindow(QtWidgets.QWidget):
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
+    # 不显示任务栏条目（只有托盘图标）
+    app.setQuitOnLastWindowClosed(False)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     overlay = OverlayWindow()
+    global _global_overlay_window
+    _global_overlay_window = overlay
+
+    # ── 系统托盘图标 ──
+    tray = _create_tray_icon(app)
+    tray.show()
 
     # ── asyncio 集成：用 QTimer 驱动 asyncio 事件循环 ──
     # 每次 QTimer 触发，运行 asyncio 事件循环直到没有待处理事件
