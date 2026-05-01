@@ -64,11 +64,14 @@ except Exception:
 
 
 def _compute_bubble_width(chars_per_line: int, font_family: str, font_size: int) -> int:
-    """根据每行字符数计算气泡像素宽度（含内边距）"""
-    font = QtGui.QFont(font_family.split(",")[0].strip().strip("'\""), font_size)
+    """根据每行字符数计算气泡像素宽度（含内边距）
+
+    font_size 对应 HTML 中的 font-size: Npx（pixelSize），
+    所以这里必须用 setPixelSize 而非 pointSize 来测量。
+    """
+    font = QtGui.QFont(font_family.split(",")[0].strip().strip("'\""))
+    font.setPixelSize(font_size)  # 必须用pixelSize，与HTML font-size一致
     fm = QtGui.QFontMetrics(font)
-    # 用中文全角字符宽度估算（一个中文字 ≈ font_size * 1.0~1.2 px）
-    # 更精确：用 "宽" 字的实际宽度
     char_width = fm.horizontalAdvance("宽")
     text_width = char_width * chars_per_line
     return text_width + 40  # 左右各20px内边距
@@ -116,6 +119,7 @@ class QuestionBubble(QtWidgets.QWidget):
         self.bubble_label = label
         label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         label.setWordWrap(True)
+        label.setMinimumWidth(bubble_max_width - 40)
         label.setMaximumWidth(bubble_max_width - 40)
 
         html_text = (
