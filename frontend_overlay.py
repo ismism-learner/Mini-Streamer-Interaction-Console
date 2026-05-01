@@ -327,8 +327,10 @@ class BubblePositionEditor(QtWidgets.QWidget):
         self.setWindowFlags(
             QtCore.Qt.WindowType.FramelessWindowHint
             | QtCore.Qt.WindowType.WindowStaysOnTopHint
+            | QtCore.Qt.WindowType.Tool
         )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setGeometry(self._screen_geo)
 
         # 气泡状态（屏幕坐标）
@@ -535,6 +537,9 @@ class BubblePositionEditor(QtWidgets.QWidget):
         self._bubble_x = max(0, min(self._bubble_x, sw - self._bubble_w))
         self._bubble_y = max(0, min(self._bubble_y, sh - self._bubble_h))
 
+    # 完成信号（用于 exec_edit 的事件循环）
+    _finished = QtCore.Signal()
+
     def _on_confirm(self):
         self._result = (
             int(self._bubble_x),
@@ -542,18 +547,30 @@ class BubblePositionEditor(QtWidgets.QWidget):
             int(self._bubble_w),
             int(self._bubble_h),
         )
-        self.close()
+        self.hide()
+        self._finished.emit()
 
     def _on_cancel(self):
         self._result = None
-        self.close()
+        self.hide()
+        self._finished.emit()
+
+    def keyPressEvent(self, event):
+        """按 Esc 退出编辑模式"""
+        if event.key() == QtCore.Qt.Key.Key_Escape:
+            self._on_cancel()
+        else:
+            super().keyPressEvent(event)
 
     def exec_edit(self):
         """显示编辑器并等待结果，返回 (x, y, w, h) 或 None"""
         self.show()
+        self.raise_()  # 确保在最前面
         loop = QtCore.QEventLoop()
-        self.destroyed.connect(loop.quit)
+        self._finished.connect(loop.quit)
         loop.exec()
+        self.close()
+        self.deleteLater()
         return self._result
 
 
