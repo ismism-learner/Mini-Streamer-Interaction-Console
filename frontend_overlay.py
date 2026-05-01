@@ -309,253 +309,252 @@ def _create_tray_icon(app: QtWidgets.QApplication) -> QtWidgets.QSystemTrayIcon:
     return icon
 
 
-class PositionEditor(QtWidgets.QWidget):
-    """弹窗位置编辑器 — 在缩略屏幕上拖拽绿色矩形调整位置和大小"""
+class BubblePositionEditor(QtWidgets.QWidget):
+    """全屏气泡位置编辑器 — 在屏幕上直接拖拽虚拟气泡调整位置和宽度
 
-    EDGE_MARGIN = 10  # 边缘检测像素（缩放后坐标）
+    进入编辑模式后，屏幕上出现一个跟真实气泡样式一样的虚拟气泡，
+    可以拖动气泡移动位置，拖动左右手柄调整宽度。
+    底部有"确认"和"取消"按钮。
+    """
+
+    HANDLE_WIDTH = 16  # 手柄宽度 px
+    MIN_BUBBLE_WIDTH = 120  # 最小气泡宽度 px
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(480, 300)
         self._screen_geo = QtWidgets.QApplication.primaryScreen().geometry()
-        # 内部以屏幕坐标存储
-        self._rect_x = 0
-        self._rect_y = 0
-        self._rect_w = 200
-        self._rect_h = 160
-        self._dragging = False
-        self._resizing = False
-        self._resize_edge = None  # "n", "s", "w", "e", "nw", "ne", "sw", "se"
+
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint
+            | QtCore.Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setGeometry(self._screen_geo)
+
+        # 气泡状态（屏幕坐标）
+        self._bubble_x = 0
+        self._bubble_y = 0
+        self._bubble_w = 420
+        self._bubble_h = 80  # 会被 set_position 重算
+
+        # 拖拽状态
+        self._dragging = False  # 拖动气泡整体
+        self._resizing_left = False  # 拖左把手
+        self._resizing_right = False  # 拖右把手
         self._drag_offset_x = 0
         self._drag_offset_y = 0
-        self._min_w = 100  # 最小屏幕像素宽
-        self._min_h = 60  # 最小屏幕像素高
 
-    @property
-    def _scale(self):
-        """缩放比例，留 20px 内边距"""
-        pad = 20
-        return min(
-            (self.width() - pad * 2) / self._screen_geo.width(),
-            (self.height() - pad * 2) / self._screen_geo.height(),
+        # 结果
+        self._result = None  # (x, y, w) or None
+
+        # 确认/取消按钮
+        self._btn_widget = QtWidgets.QWidget(self)
+        btn_layout = QtWidgets.QHBoxLayout(self._btn_widget)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+
+        confirm_btn = QtWidgets.QPushButton("确认位置")
+        confirm_btn.setFixedSize(120, 36)
+        confirm_btn.setStyleSheet(
+            "QPushButton { background-color: #4CAF50; color: white; border-radius: 6px; font-size: 14px; }"
+            "QPushButton:hover { background-color: #45a049; }"
         )
+        cancel_btn = QtWidgets.QPushButton("取消")
+        cancel_btn.setFixedSize(80, 36)
+        cancel_btn.setStyleSheet(
+            "QPushButton { background-color: #666; color: white; border-radius: 6px; font-size: 14px; }"
+            "QPushButton:hover { background-color: #555; }"
+        )
+        btn_layout.addWidget(confirm_btn)
+        btn_layout.addWidget(cancel_btn)
 
-    @property
-    def _offset(self):
-        """缩略图在 widget 中的偏移量（居中）"""
-        s = self._scale
-        sw = self._screen_geo.width() * s
-        sh = self._screen_geo.height() * s
-        return (self.width() - sw) / 2, (self.height() - sh) / 2
-
-    def _screen_to_widget(self, sx, sy):
-        s = self._scale
-        ox, oy = self._offset
-        return int(sx * s + ox), int(sy * s + oy)
-
-    def _widget_to_screen(self, wx, wy):
-        s = self._scale
-        ox, oy = self._offset
-        if s == 0:
-            return 0, 0
-        return int((wx - ox) / s), int((wy - oy) / s)
-
-    def _detect_edge(self, wx, wy):
-        """检测鼠标在 widget 坐标下是否在绿色矩形边缘，返回边名称或 None"""
-        rx, ry = self._screen_to_widget(self._rect_x, self._rect_y)
-        rw = max(int(self._rect_w * self._scale), 1)
-        rh = max(int(self._rect_h * self._scale), 1)
-        m = self.EDGE_MARGIN
-
-        on_left = abs(wx - rx) <= m
-        on_right = abs(wx - (rx + rw)) <= m
-        on_top = abs(wy - ry) <= m
-        on_bottom = abs(wy - (ry + rh)) <= m
-
-        if on_left and on_top:
-            return "nw"
-        if on_right and on_top:
-            return "ne"
-        if on_left and on_bottom:
-            return "sw"
-        if on_right and on_bottom:
-            return "se"
-        if on_left:
-            return "w"
-        if on_right:
-            return "e"
-        if on_top:
-            return "n"
-        if on_bottom:
-            return "s"
-        return None
+        confirm_btn.clicked.connect(self._on_confirm)
+        cancel_btn.clicked.connect(self._on_cancel)
 
     def set_position(self, x, y, w, h):
-        """从屏幕坐标设置矩形位置"""
-        self._rect_x = x if x >= 0 else self._screen_geo.width() - w - 30
-        self._rect_y = y if y >= 0 else self._screen_geo.height() - h - 40
-        self._rect_w = w
-        self._rect_h = h
-        # 确保不越界
-        self._clamp_rect()
+        """从屏幕坐标设置气泡位置"""
+        screen_w = self._screen_geo.width()
+        screen_h = self._screen_geo.height()
+        self._bubble_w = w
+        self._bubble_h = max(h, 60)
+        self._bubble_x = x if x >= 0 else screen_w - w - 30
+        self._bubble_y = y if y >= 0 else screen_h - self._bubble_h - 40
+        self._update_btn_position()
         self.update()
 
     def get_position(self):
         """返回屏幕坐标 (x, y, w, h)"""
-        return self._rect_x, self._rect_y, self._rect_w, self._rect_h
+        return self._bubble_x, self._bubble_y, self._bubble_w, self._bubble_h
 
-    def _clamp_rect(self):
-        """将矩形限制在屏幕范围内"""
-        sw, sh = self._screen_geo.width(), self._screen_geo.height()
-        self._rect_w = max(self._min_w, min(self._rect_w, sw))
-        self._rect_h = max(self._min_h, min(self._rect_h, sh))
-        self._rect_x = max(0, min(self._rect_x, sw - self._rect_w))
-        self._rect_y = max(0, min(self._rect_y, sh - self._rect_h))
+    def _update_btn_position(self):
+        """把确认/取消按钮放在气泡下方居中"""
+        bx = self._bubble_x
+        by = self._bubble_y + self._bubble_h + 8
+        self._btn_widget.setGeometry(int(bx), int(by), int(self._bubble_w), 40)
+
+    def _bubble_rect(self):
+        return QtCore.QRect(
+            int(self._bubble_x),
+            int(self._bubble_y),
+            int(self._bubble_w),
+            int(self._bubble_h),
+        )
+
+    def _left_handle_rect(self):
+        return QtCore.QRect(
+            int(self._bubble_x - self.HANDLE_WIDTH // 2),
+            int(self._bubble_y),
+            self.HANDLE_WIDTH,
+            int(self._bubble_h),
+        )
+
+    def _right_handle_rect(self):
+        rx = self._bubble_x + self._bubble_w - self.HANDLE_WIDTH // 2
+        return QtCore.QRect(
+            int(rx), int(self._bubble_y), self.HANDLE_WIDTH, int(self._bubble_h)
+        )
 
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
-        # 整体背景
-        painter.setBrush(QtGui.QColor("#1e1e1e"))
+        # 半透明遮罩（让编辑区域更明显）
+        painter.setBrush(QtGui.QColor(0, 0, 0, 60))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawRect(self.rect())
 
-        # 屏幕缩略图区域（带边框）
-        s = self._scale
-        ox, oy = self._offset
-        sw = int(self._screen_geo.width() * s)
-        sh = int(self._screen_geo.height() * s)
-        painter.setBrush(QtGui.QColor("#2a2a2a"))
-        painter.setPen(QtGui.QPen(QtGui.QColor("#555555"), 1))
-        painter.drawRect(int(ox), int(oy), sw, sh)
+        # 气泡本体（跟真实气泡一样的深色圆角矩形）
+        bubble = self._bubble_rect().adjusted(2, 2, -2, -2)
+        painter.setBrush(QtGui.QColor(20, 20, 30, 200))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(bubble, 16, 16)
 
-        # 绿色矩形（缩放后坐标）
-        rx, ry = self._screen_to_widget(self._rect_x, self._rect_y)
-        rw = max(int(self._rect_w * s), 1)
-        rh = max(int(self._rect_h * s), 1)
+        # 绿色虚线边框（编辑状态标识）
+        pen = QtGui.QPen(QtGui.QColor("#4CAF50"), 2, QtCore.Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(bubble, 16, 16)
 
-        # 半透明填充
-        painter.setBrush(QtGui.QColor(76, 175, 80, 80))
-        painter.setPen(QtGui.QPen(QtGui.QColor("#4CAF50"), 2))
-        painter.drawRect(rx, ry, rw, rh)
-
-        # 内部文字
-        painter.setPen(QtGui.QColor(255, 255, 255, 200))
+        # 气泡内文字
+        painter.setPen(QtGui.QColor(255, 255, 255, 220))
         font = painter.font()
-        font.setPointSize(10)
+        font.setPointSize(DISPLAY_FONT_SIZE if DISPLAY_FONT_SIZE <= 20 else 20)
+        font.setFamily(DISPLAY_FONT_FAMILY.split(",")[0].strip().strip("'\""))
         painter.setFont(font)
-        painter.drawText(
-            QtCore.QRect(rx, ry, rw, rh),
-            QtCore.Qt.AlignmentFlag.AlignCenter,
-            "弹窗区域",
-        )
+        text = "拖动我调整位置" if not DISABLE_EMOJI else "拖动调整位置"
+        painter.drawText(bubble, QtCore.Qt.AlignmentFlag.AlignCenter, text)
 
-        # 屏幕分辨率标注
-        painter.setPen(QtGui.QColor("#888888"))
-        font.setPointSize(8)
-        painter.setFont(font)
-        painter.drawText(
-            int(ox),
-            int(oy + sh + 2),
-            sw,
-            16,
-            QtCore.Qt.AlignmentFlag.AlignCenter,
-            f"{self._screen_geo.width()}x{self._screen_geo.height()}",
-        )
+        # 左手柄
+        lh = self._left_handle_rect()
+        painter.setBrush(QtGui.QColor(76, 175, 80, 180))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#4CAF50"), 1))
+        painter.drawRoundedRect(lh, 4, 4)
+        # 手柄内竖线
+        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 180), 2))
+        mid_x = lh.x() + lh.width() // 2
+        painter.drawLine(mid_x, lh.y() + 10, mid_x, lh.y() + lh.height() - 10)
+
+        # 右手柄
+        rh = self._right_handle_rect()
+        painter.setBrush(QtGui.QColor(76, 175, 80, 180))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#4CAF50"), 1))
+        painter.drawRoundedRect(rh, 4, 4)
+        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 180), 2))
+        mid_x2 = rh.x() + rh.width() // 2
+        painter.drawLine(mid_x2, rh.y() + 10, mid_x2, rh.y() + rh.height() - 10)
 
     def mousePressEvent(self, event):
         if event.button() != QtCore.Qt.MouseButton.LeftButton:
             return
-        wx, wy = event.position().x(), event.position().y()
-        edge = self._detect_edge(wx, wy)
-        if edge:
-            self._resizing = True
-            self._resize_edge = edge
-            rx, ry = self._screen_to_widget(self._rect_x, self._rect_y)
-            rw = max(int(self._rect_w * self._scale), 1)
-            rh = max(int(self._rect_h * self._scale), 1)
-            self._drag_offset_x = wx
-            self._drag_offset_y = wy
-            # 根据边缘记录起始矩形（widget 坐标）
-            self._resize_start = (rx, ry, rw, rh)
-            self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
-        else:
-            # 检查是否在矩形内部
-            rx, ry = self._screen_to_widget(self._rect_x, self._rect_y)
-            rw = max(int(self._rect_w * self._scale), 1)
-            rh = max(int(self._rect_h * self._scale), 1)
-            if rx <= wx <= rx + rw and ry <= wy <= ry + rh:
-                self._dragging = True
-                self._drag_offset_x = wx - rx
-                self._drag_offset_y = wy - ry
-                self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+        mx, my = event.position().x(), event.position().y()
+
+        # 检查左右手柄
+        if self._left_handle_rect().contains(int(mx), int(my)):
+            self._resizing_left = True
+            self._drag_offset_x = mx
+            return
+        if self._right_handle_rect().contains(int(mx), int(my)):
+            self._resizing_right = True
+            self._drag_offset_x = mx
+            return
+
+        # 检查气泡内部
+        if self._bubble_rect().contains(int(mx), int(my)):
+            self._dragging = True
+            self._drag_offset_x = mx - self._bubble_x
+            self._drag_offset_y = my - self._bubble_y
+            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
 
     def mouseMoveEvent(self, event):
-        wx, wy = event.position().x(), event.position().y()
+        mx, my = event.position().x(), event.position().y()
 
-        if self._resizing and self._resize_edge:
-            s = self._scale
-            if s == 0:
-                return
-            sx0, sy0, sw0, sh0 = self._resize_start  # widget 坐标
-            # 转换偏移为 widget 坐标增量
-            dwx = wx - self._drag_offset_x
-            dwy = wy - self._drag_offset_y
-
-            new_rx, new_ry, new_rw, new_rh = sx0, sy0, sw0, sh0
-            edge = self._resize_edge
-
-            if "w" in edge:
-                new_rx = sx0 + dwx
-                new_rw = sw0 - dwx
-            if "e" in edge:
-                new_rw = sw0 + dwx
-            if "n" in edge:
-                new_ry = sy0 + dwy
-                new_rh = sh0 - dwy
-            if "s" in edge:
-                new_rh = sh0 + dwy
-
-            # 最小尺寸限制（widget 坐标）
-            min_w = max(int(self._min_w * s), 1)
-            min_h = max(int(self._min_h * s), 1)
-            if new_rw < min_w:
-                if "w" in edge:
-                    new_rx = sx0 + sw0 - min_w
-                new_rw = min_w
-            if new_rh < min_h:
-                if "n" in edge:
-                    new_ry = sy0 + sh0 - min_h
-                new_rh = min_h
-
-            # 转换回屏幕坐标
-            self._rect_x, self._rect_y = self._widget_to_screen(new_rx, new_ry)
-            self._rect_w = max(int(new_rw / s), self._min_w)
-            self._rect_h = max(int(new_rh / s), self._min_h)
-            self._clamp_rect()
+        if self._dragging:
+            self._bubble_x = mx - self._drag_offset_x
+            self._bubble_y = my - self._drag_offset_y
+            self._clamp_bubble()
+            self._update_btn_position()
             self.update()
-        elif self._dragging:
-            new_rx = int(wx - self._drag_offset_x)
-            new_ry = int(wy - self._drag_offset_y)
-            self._rect_x, self._rect_y = self._widget_to_screen(new_rx, new_ry)
-            self._clamp_rect()
-            self.update()
+        elif self._resizing_left:
+            dx = mx - self._drag_offset_x
+            new_x = self._bubble_x + dx
+            new_w = self._bubble_w - dx
+            if new_w >= self.MIN_BUBBLE_WIDTH:
+                self._bubble_x = new_x
+                self._bubble_w = new_w
+                self._drag_offset_x = mx
+                self._update_btn_position()
+                self.update()
+        elif self._resizing_right:
+            dx = mx - self._drag_offset_x
+            new_w = self._bubble_w + dx
+            if new_w >= self.MIN_BUBBLE_WIDTH:
+                self._bubble_w = new_w
+                self._drag_offset_x = mx
+                self._update_btn_position()
+                self.update()
         else:
-            # 更新光标形状
-            edge = self._detect_edge(wx, wy)
-            if edge:
-                self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+            # 光标提示
+            if self._left_handle_rect().contains(int(mx), int(my)):
+                self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
+            elif self._right_handle_rect().contains(int(mx), int(my)):
+                self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
+            elif self._bubble_rect().contains(int(mx), int(my)):
+                self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
             else:
                 self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
-        if event.button() != QtCore.Qt.MouseButton.LeftButton:
-            return
         self._dragging = False
-        self._resizing = False
-        self._resize_edge = None
+        self._resizing_left = False
+        self._resizing_right = False
         self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+
+    def _clamp_bubble(self):
+        """限制气泡在屏幕内"""
+        sw = self._screen_geo.width()
+        sh = self._screen_geo.height()
+        self._bubble_x = max(0, min(self._bubble_x, sw - self._bubble_w))
+        self._bubble_y = max(0, min(self._bubble_y, sh - self._bubble_h))
+
+    def _on_confirm(self):
+        self._result = (
+            int(self._bubble_x),
+            int(self._bubble_y),
+            int(self._bubble_w),
+            int(self._bubble_h),
+        )
+        self.close()
+
+    def _on_cancel(self):
+        self._result = None
+        self.close()
+
+    def exec_edit(self):
+        """显示编辑器并等待结果，返回 (x, y, w, h) 或 None"""
+        self.show()
+        loop = QtCore.QEventLoop()
+        self.destroyed.connect(loop.quit)
+        loop.exec()
+        return self._result
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -618,14 +617,21 @@ class SettingsDialog(QtWidgets.QDialog):
         pos_group = QtWidgets.QGroupBox("弹窗位置")
         pos_layout = QtWidgets.QVBoxLayout(pos_group)
 
-        pos_hint = QtWidgets.QLabel("拖动绿色区域调整弹窗出现的位置和大小")
+        pos_hint = QtWidgets.QLabel(
+            "点击下方按钮，在屏幕上直接拖拽虚拟气泡调整位置和宽度"
+        )
         pos_hint.setStyleSheet("color: #888; font-size: 12px;")
         pos_layout.addWidget(pos_hint)
 
-        self.pos_editor = PositionEditor()
-        pos_layout.addWidget(
-            self.pos_editor, alignment=QtCore.Qt.AlignmentFlag.AlignCenter
-        )
+        self.pos_btn = QtWidgets.QPushButton("调整位置...")
+        self.pos_btn.setStyleSheet("QPushButton { padding: 8px; font-size: 14px; }")
+        self.pos_btn.clicked.connect(self._open_position_editor)
+        pos_layout.addWidget(self.pos_btn)
+
+        self._pos_x = DISPLAY_X
+        self._pos_y = DISPLAY_Y
+        self._pos_w = DISPLAY_WIDTH
+        self._pos_h = DISPLAY_HEIGHT
 
         layout.addWidget(pos_group)
 
@@ -700,9 +706,18 @@ class SettingsDialog(QtWidgets.QDialog):
         self.prompt_edit.setPlainText(_SYSTEM_PROMPT)
 
         # 弹窗位置
-        self.pos_editor.set_position(
-            DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
-        )
+        self._pos_x = DISPLAY_X
+        self._pos_y = DISPLAY_Y
+        self._pos_w = DISPLAY_WIDTH
+        self._pos_h = DISPLAY_HEIGHT
+
+    def _open_position_editor(self):
+        """打开全屏气泡位置编辑器"""
+        editor = BubblePositionEditor()
+        editor.set_position(self._pos_x, self._pos_y, self._pos_w, self._pos_h)
+        result = editor.exec_edit()
+        if result is not None:
+            self._pos_x, self._pos_y, self._pos_w, self._pos_h = result
 
     def _on_save(self):
         """保存设置：更新全局变量 + 写回 config.yaml"""
@@ -718,7 +733,7 @@ class SettingsDialog(QtWidgets.QDialog):
         disappear_seconds = self.disappear_spin.value()
         trigger_lines = self.trigger_edit.toPlainText().strip().splitlines()
         trigger_phrases = [line.strip() for line in trigger_lines if line.strip()]
-        pos_x, pos_y, pos_w, pos_h = self.pos_editor.get_position()
+        pos_x, pos_y, pos_w, pos_h = self._pos_x, self._pos_y, self._pos_w, self._pos_h
 
         # 2. 更新运行时全局变量
         DISPLAY_FONT_FAMILY = font_family
