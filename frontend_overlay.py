@@ -50,6 +50,7 @@ try:
     DISPLAY_HEIGHT = _cfg.DISPLAY_HEIGHT  # 340
     DISPLAY_DISAPPEAR_MODE = _cfg.DISPLAY_DISAPPEAR_MODE  # timed/keep/stack
     DISPLAY_DISAPPEAR_SECONDS = _cfg.DISPLAY_DISAPPEAR_SECONDS  # seconds
+    DISPLAY_MAX_TEXT_LENGTH = _cfg.DISPLAY_MAX_TEXT_LENGTH  # max chars in bubble
 except Exception:
     DISPLAY_FONT_FAMILY = "Microsoft YaHei UI, PingFang SC, sans-serif"
     DISPLAY_FONT_SIZE = 28
@@ -60,6 +61,7 @@ except Exception:
     DISPLAY_HEIGHT = 340
     DISPLAY_DISAPPEAR_MODE = "timed"
     DISPLAY_DISAPPEAR_SECONDS = 4
+    DISPLAY_MAX_TEXT_LENGTH = 50
     _SYSTEM_PROMPT = "（无法加载 LLM 提示词）"
 
 
@@ -99,6 +101,11 @@ class QuestionBubble(QtWidgets.QWidget):
         label.setWordWrap(True)
         label.setMaximumWidth(DISPLAY_WIDTH - 40)
 
+        # 截断过长文字
+        display_text = text
+        if DISPLAY_MAX_TEXT_LENGTH > 0 and len(display_text) > DISPLAY_MAX_TEXT_LENGTH:
+            display_text = display_text[:DISPLAY_MAX_TEXT_LENGTH] + "…"
+
         html_text = (
             '<div style="'
             f"  font-size: {DISPLAY_FONT_SIZE}px;"
@@ -107,7 +114,10 @@ class QuestionBubble(QtWidgets.QWidget):
             "  text-shadow: 0 2px 8px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.6);"
             "  line-height: 1.4;"
             f"  font-family: '{DISPLAY_FONT_FAMILY}';"
-            '">' + ("" if DISABLE_EMOJI else "  💡 ") + _escape_html(text) + "</div>"
+            '">'
+            + ("" if DISABLE_EMOJI else "  💡 ")
+            + _escape_html(display_text)
+            + "</div>"
         )
         label.setText(html_text)
         label.adjustSize()
@@ -283,14 +293,50 @@ def _create_tray_icon(app: QtWidgets.QApplication) -> QtWidgets.QSystemTrayIcon:
 
     # ── 右键菜单 ──
     menu = QtWidgets.QMenu()
+    pos_action = menu.addAction("调整位置(P)")
     settings_action = menu.addAction("设置(S)")
+    menu.addSeparator()
     quit_action = menu.addAction("退出(Q)")
+
+    # 调整位置：直接打开全屏拖拽编辑器
+    def _open_position_editor():
+        global DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
+        editor = BubblePositionEditor()
+        editor.set_position(DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+        result = editor.exec_edit()
+        if result is not None:
+            DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT = result
+            _cfg.DISPLAY_X = DISPLAY_X
+            _cfg.DISPLAY_Y = DISPLAY_Y
+            _cfg.DISPLAY_WIDTH = DISPLAY_WIDTH
+            _cfg.DISPLAY_HEIGHT = DISPLAY_HEIGHT
+            # 写回 config.yaml
+            try:
+                config_path = Path(__file__).parent / "config.yaml"
+                with open(config_path, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+                cfg["DISPLAY_X"] = DISPLAY_X
+                cfg["DISPLAY_Y"] = DISPLAY_Y
+                cfg["DISPLAY_WIDTH"] = DISPLAY_WIDTH
+                cfg["DISPLAY_HEIGHT"] = DISPLAY_HEIGHT
+                with open(config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(
+                        cfg,
+                        f,
+                        allow_unicode=True,
+                        default_flow_style=False,
+                        sort_keys=False,
+                    )
+            except Exception as exc:
+                log.warning(f"写入位置失败: {exc}")
+            log.info(f"位置已更新: x={DISPLAY_X}, y={DISPLAY_Y}, w={DISPLAY_WIDTH}")
 
     # 设置：打开 SettingsDialog
     def _open_settings():
         dialog = SettingsDialog()
         dialog.exec()
 
+    pos_action.triggered.connect(_open_position_editor)
     settings_action.triggered.connect(_open_settings)
 
     # 退出
@@ -640,7 +686,28 @@ class SettingsDialog(QtWidgets.QDialog):
         self.disappear_spin.setSuffix(" 秒")
         display_layout.addRow("停留时间:", self.disappear_spin)
 
+        self.max_text_spin = QtWidgets.QSpinBox()
+        self.max_text_spin.setRange(10, 200)
+        self.max_text_spin.setSuffix(" 字")
+        display_layout.addRow("最大显示字数:", self.max_text_spin)
+
         layout.addWidget(display_group)
+
+        # ── 触发条件 ──
+        trigger_cond_group = QtWidgets.QGroupBox("触发条件")
+        trigger_cond_layout = QtWidgets.QFormLayout(trigger_cond_group)
+
+        self.min_words_spin = QtWidgets.QSpinBox()
+        self.min_words_spin.setRange(10, 5000)
+        self.min_words_spin.setSuffix(" 字")
+        trigger_cond_layout.addRow("累积字数阈值:", self.min_words_spin)
+
+        self.max_words_spin = QtWidgets.QSpinBox()
+        self.max_words_spin.setRange(20, 10000)
+        self.max_words_spin.setSuffix(" 字")
+        trigger_cond_layout.addRow("最大强制触发:", self.max_words_spin)
+
+        layout.addWidget(trigger_cond_group)
 
         # ── 弹窗位置 ──
         pos_group = QtWidgets.QGroupBox("弹窗位置")
@@ -726,6 +793,11 @@ class SettingsDialog(QtWidgets.QDialog):
         if idx >= 0:
             self.disappear_combo.setCurrentIndex(idx)
         self.disappear_spin.setValue(DISPLAY_DISAPPEAR_SECONDS)
+        self.max_text_spin.setValue(DISPLAY_MAX_TEXT_LENGTH)
+
+        # 触发条件
+        self.min_words_spin.setValue(_cfg.MIN_WORDS_FOR_QUESTION)
+        self.max_words_spin.setValue(_cfg.MAX_WORDS_FORCE_TRIGGER)
 
         # 触发词
         if hasattr(_cfg, "TRIGGER_PHRASES"):
@@ -752,7 +824,10 @@ class SettingsDialog(QtWidgets.QDialog):
         """保存设置：更新全局变量 + 写回 config.yaml"""
         global DISPLAY_FONT_FAMILY, DISPLAY_FONT_SIZE, DISABLE_EMOJI
         global DISPLAY_X, DISPLAY_Y, DISPLAY_WIDTH, DISPLAY_HEIGHT
-        global DISPLAY_DISAPPEAR_MODE, DISPLAY_DISAPPEAR_SECONDS
+        global \
+            DISPLAY_DISAPPEAR_MODE, \
+            DISPLAY_DISAPPEAR_SECONDS, \
+            DISPLAY_MAX_TEXT_LENGTH
 
         # 1. 读取值
         font_family = self.font_combo.currentText().strip()
@@ -760,6 +835,9 @@ class SettingsDialog(QtWidgets.QDialog):
         disable_emoji = self.emoji_check.isChecked()
         disappear_mode = self.disappear_combo.currentData()
         disappear_seconds = self.disappear_spin.value()
+        max_text_length = self.max_text_spin.value()
+        min_words = self.min_words_spin.value()
+        max_words = self.max_words_spin.value()
         trigger_lines = self.trigger_edit.toPlainText().strip().splitlines()
         trigger_phrases = [line.strip() for line in trigger_lines if line.strip()]
         pos_x, pos_y, pos_w, pos_h = self._pos_x, self._pos_y, self._pos_w, self._pos_h
@@ -774,6 +852,7 @@ class SettingsDialog(QtWidgets.QDialog):
         DISPLAY_HEIGHT = pos_h
         DISPLAY_DISAPPEAR_MODE = disappear_mode
         DISPLAY_DISAPPEAR_SECONDS = disappear_seconds
+        DISPLAY_MAX_TEXT_LENGTH = max_text_length
         if hasattr(_cfg, "TRIGGER_PHRASES"):
             _cfg.TRIGGER_PHRASES = trigger_phrases
         _cfg.DISPLAY_X = pos_x
@@ -782,6 +861,9 @@ class SettingsDialog(QtWidgets.QDialog):
         _cfg.DISPLAY_HEIGHT = pos_h
         _cfg.DISPLAY_DISAPPEAR_MODE = disappear_mode
         _cfg.DISPLAY_DISAPPEAR_SECONDS = disappear_seconds
+        _cfg.DISPLAY_MAX_TEXT_LENGTH = max_text_length
+        _cfg.MIN_WORDS_FOR_QUESTION = min_words
+        _cfg.MAX_WORDS_FORCE_TRIGGER = max_words
 
         # 3. 写回 config.yaml
         try:
@@ -798,6 +880,9 @@ class SettingsDialog(QtWidgets.QDialog):
             cfg["DISPLAY_HEIGHT"] = pos_h
             cfg["DISPLAY_DISAPPEAR_MODE"] = disappear_mode
             cfg["DISPLAY_DISAPPEAR_SECONDS"] = disappear_seconds
+            cfg["DISPLAY_MAX_TEXT_LENGTH"] = max_text_length
+            cfg["MIN_WORDS_FOR_QUESTION"] = min_words
+            cfg["MAX_WORDS_FORCE_TRIGGER"] = max_words
             cfg["TRIGGER_PHRASES"] = trigger_phrases
 
             with open(config_path, "w", encoding="utf-8") as f:

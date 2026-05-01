@@ -57,6 +57,7 @@ class Config:
         self.DISPLAY_HEIGHT = cfg.get("DISPLAY_HEIGHT", 340)
         self.DISPLAY_DISAPPEAR_MODE = cfg.get("DISPLAY_DISAPPEAR_MODE", "timed")
         self.DISPLAY_DISAPPEAR_SECONDS = cfg.get("DISPLAY_DISAPPEAR_SECONDS", 4)
+        self.DISPLAY_MAX_TEXT_LENGTH = cfg.get("DISPLAY_MAX_TEXT_LENGTH", 50)
 
         # STT 配置
         self.WHISPER_MODEL_SIZE = cfg.get("WHISPER_MODEL_SIZE", "small")
