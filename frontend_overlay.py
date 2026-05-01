@@ -114,6 +114,7 @@ class QuestionBubble(QtWidgets.QWidget):
         # 内容
         label = QtWidgets.QLabel(self)
         self.bubble_label = label
+        label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         label.setWordWrap(True)
         label.setMaximumWidth(bubble_max_width - 40)
 
