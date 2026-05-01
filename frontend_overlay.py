@@ -314,11 +314,15 @@ class BubblePositionEditor(QtWidgets.QWidget):
 
     进入编辑模式后，屏幕上出现一个跟真实气泡样式一样的虚拟气泡，
     可以拖动气泡移动位置，拖动左右手柄调整宽度。
-    底部有"确认"和"取消"按钮。
+    底部有"确认"和"取消"按钮（纯绘制，不使用子控件）。
     """
 
     HANDLE_WIDTH = 16  # 手柄宽度 px
     MIN_BUBBLE_WIDTH = 120  # 最小气泡宽度 px
+    BTN_HEIGHT = 36  # 按钮高度 px
+
+    # 完成信号（用于 exec_edit 的事件循环）
+    _finished = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -330,47 +334,24 @@ class BubblePositionEditor(QtWidgets.QWidget):
             | QtCore.Qt.WindowType.Tool
         )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setGeometry(self._screen_geo)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
 
         # 气泡状态（屏幕坐标）
         self._bubble_x = 0
         self._bubble_y = 0
         self._bubble_w = 420
-        self._bubble_h = 80  # 会被 set_position 重算
+        self._bubble_h = 80
 
         # 拖拽状态
-        self._dragging = False  # 拖动气泡整体
-        self._resizing_left = False  # 拖左把手
-        self._resizing_right = False  # 拖右把手
+        self._dragging = False
+        self._resizing_left = False
+        self._resizing_right = False
         self._drag_offset_x = 0
         self._drag_offset_y = 0
 
         # 结果
-        self._result = None  # (x, y, w) or None
-
-        # 确认/取消按钮
-        self._btn_widget = QtWidgets.QWidget(self)
-        btn_layout = QtWidgets.QHBoxLayout(self._btn_widget)
-        btn_layout.setContentsMargins(0, 0, 0, 0)
-
-        confirm_btn = QtWidgets.QPushButton("确认位置")
-        confirm_btn.setFixedSize(120, 36)
-        confirm_btn.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; border-radius: 6px; font-size: 14px; }"
-            "QPushButton:hover { background-color: #45a049; }"
-        )
-        cancel_btn = QtWidgets.QPushButton("取消")
-        cancel_btn.setFixedSize(80, 36)
-        cancel_btn.setStyleSheet(
-            "QPushButton { background-color: #666; color: white; border-radius: 6px; font-size: 14px; }"
-            "QPushButton:hover { background-color: #555; }"
-        )
-        btn_layout.addWidget(confirm_btn)
-        btn_layout.addWidget(cancel_btn)
-
-        confirm_btn.clicked.connect(self._on_confirm)
-        cancel_btn.clicked.connect(self._on_cancel)
+        self._result = None
 
     def set_position(self, x, y, w, h):
         """从屏幕坐标设置气泡位置"""
@@ -380,18 +361,14 @@ class BubblePositionEditor(QtWidgets.QWidget):
         self._bubble_h = max(h, 60)
         self._bubble_x = x if x >= 0 else screen_w - w - 30
         self._bubble_y = y if y >= 0 else screen_h - self._bubble_h - 40
-        self._update_btn_position()
+        # 确保按钮区域不超出屏幕
+        if self._bubble_y + self._bubble_h + self.BTN_HEIGHT + 12 > screen_h:
+            self._bubble_y = screen_h - self._bubble_h - self.BTN_HEIGHT - 12
         self.update()
 
     def get_position(self):
         """返回屏幕坐标 (x, y, w, h)"""
         return self._bubble_x, self._bubble_y, self._bubble_w, self._bubble_h
-
-    def _update_btn_position(self):
-        """把确认/取消按钮放在气泡下方居中"""
-        bx = self._bubble_x
-        by = self._bubble_y + self._bubble_h + 8
-        self._btn_widget.setGeometry(int(bx), int(by), int(self._bubble_w), 40)
 
     def _bubble_rect(self):
         return QtCore.QRect(
@@ -415,22 +392,32 @@ class BubblePositionEditor(QtWidgets.QWidget):
             int(rx), int(self._bubble_y), self.HANDLE_WIDTH, int(self._bubble_h)
         )
 
+    def _confirm_btn_rect(self):
+        """确认按钮区域"""
+        by = self._bubble_y + self._bubble_h + 8
+        return QtCore.QRect(int(self._bubble_x), int(by), 120, self.BTN_HEIGHT)
+
+    def _cancel_btn_rect(self):
+        """取消按钮区域"""
+        by = self._bubble_y + self._bubble_h + 8
+        return QtCore.QRect(int(self._bubble_x + 130), int(by), 80, self.BTN_HEIGHT)
+
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
-        # 半透明遮罩（让编辑区域更明显）
+        # 半透明遮罩
         painter.setBrush(QtGui.QColor(0, 0, 0, 60))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawRect(self.rect())
 
-        # 气泡本体（跟真实气泡一样的深色圆角矩形）
+        # 气泡本体
         bubble = self._bubble_rect().adjusted(2, 2, -2, -2)
         painter.setBrush(QtGui.QColor(20, 20, 30, 200))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawRoundedRect(bubble, 16, 16)
 
-        # 绿色虚线边框（编辑状态标识）
+        # 绿色虚线边框
         pen = QtGui.QPen(QtGui.QColor("#4CAF50"), 2, QtCore.Qt.PenStyle.DashLine)
         painter.setPen(pen)
         painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
@@ -439,7 +426,7 @@ class BubblePositionEditor(QtWidgets.QWidget):
         # 气泡内文字
         painter.setPen(QtGui.QColor(255, 255, 255, 220))
         font = painter.font()
-        font.setPointSize(DISPLAY_FONT_SIZE if DISPLAY_FONT_SIZE <= 20 else 20)
+        font.setPointSize(min(DISPLAY_FONT_SIZE, 20))
         font.setFamily(DISPLAY_FONT_FAMILY.split(",")[0].strip().strip("'\""))
         painter.setFont(font)
         text = "拖动我调整位置" if not DISABLE_EMOJI else "拖动调整位置"
@@ -450,7 +437,6 @@ class BubblePositionEditor(QtWidgets.QWidget):
         painter.setBrush(QtGui.QColor(76, 175, 80, 180))
         painter.setPen(QtGui.QPen(QtGui.QColor("#4CAF50"), 1))
         painter.drawRoundedRect(lh, 4, 4)
-        # 手柄内竖线
         painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 180), 2))
         mid_x = lh.x() + lh.width() // 2
         painter.drawLine(mid_x, lh.y() + 10, mid_x, lh.y() + lh.height() - 10)
@@ -464,10 +450,36 @@ class BubblePositionEditor(QtWidgets.QWidget):
         mid_x2 = rh.x() + rh.width() // 2
         painter.drawLine(mid_x2, rh.y() + 10, mid_x2, rh.y() + rh.height() - 10)
 
+        # 确认按钮
+        cb = self._confirm_btn_rect()
+        painter.setBrush(QtGui.QColor("#4CAF50"))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(cb, 6, 6)
+        painter.setPen(QtGui.QColor(255, 255, 255))
+        font.setPointSize(12)
+        painter.setFont(font)
+        painter.drawText(cb, QtCore.Qt.AlignmentFlag.AlignCenter, "确认位置")
+
+        # 取消按钮
+        xb = self._cancel_btn_rect()
+        painter.setBrush(QtGui.QColor("#666666"))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(xb, 6, 6)
+        painter.setPen(QtGui.QColor(255, 255, 255))
+        painter.drawText(xb, QtCore.Qt.AlignmentFlag.AlignCenter, "取消")
+
     def mousePressEvent(self, event):
         if event.button() != QtCore.Qt.MouseButton.LeftButton:
             return
         mx, my = event.position().x(), event.position().y()
+
+        # 检查按钮
+        if self._confirm_btn_rect().contains(int(mx), int(my)):
+            self._on_confirm()
+            return
+        if self._cancel_btn_rect().contains(int(mx), int(my)):
+            self._on_cancel()
+            return
 
         # 检查左右手柄
         if self._left_handle_rect().contains(int(mx), int(my)):
@@ -493,7 +505,6 @@ class BubblePositionEditor(QtWidgets.QWidget):
             self._bubble_x = mx - self._drag_offset_x
             self._bubble_y = my - self._drag_offset_y
             self._clamp_bubble()
-            self._update_btn_position()
             self.update()
         elif self._resizing_left:
             dx = mx - self._drag_offset_x
@@ -503,7 +514,6 @@ class BubblePositionEditor(QtWidgets.QWidget):
                 self._bubble_x = new_x
                 self._bubble_w = new_w
                 self._drag_offset_x = mx
-                self._update_btn_position()
                 self.update()
         elif self._resizing_right:
             dx = mx - self._drag_offset_x
@@ -511,11 +521,14 @@ class BubblePositionEditor(QtWidgets.QWidget):
             if new_w >= self.MIN_BUBBLE_WIDTH:
                 self._bubble_w = new_w
                 self._drag_offset_x = mx
-                self._update_btn_position()
                 self.update()
         else:
             # 光标提示
-            if self._left_handle_rect().contains(int(mx), int(my)):
+            if self._confirm_btn_rect().contains(int(mx), int(my)):
+                self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            elif self._cancel_btn_rect().contains(int(mx), int(my)):
+                self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            elif self._left_handle_rect().contains(int(mx), int(my)):
                 self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
             elif self._right_handle_rect().contains(int(mx), int(my)):
                 self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
@@ -531,14 +544,13 @@ class BubblePositionEditor(QtWidgets.QWidget):
         self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
 
     def _clamp_bubble(self):
-        """限制气泡在屏幕内"""
+        """限制气泡在屏幕内，同时确保按钮区域可见"""
         sw = self._screen_geo.width()
         sh = self._screen_geo.height()
         self._bubble_x = max(0, min(self._bubble_x, sw - self._bubble_w))
-        self._bubble_y = max(0, min(self._bubble_y, sh - self._bubble_h))
-
-    # 完成信号（用于 exec_edit 的事件循环）
-    _finished = QtCore.Signal()
+        self._bubble_y = max(
+            0, min(self._bubble_y, sh - self._bubble_h - self.BTN_HEIGHT - 12)
+        )
 
     def _on_confirm(self):
         self._result = (
@@ -556,7 +568,6 @@ class BubblePositionEditor(QtWidgets.QWidget):
         self._finished.emit()
 
     def keyPressEvent(self, event):
-        """按 Esc 退出编辑模式"""
         if event.key() == QtCore.Qt.Key.Key_Escape:
             self._on_cancel()
         else:
@@ -565,7 +576,8 @@ class BubblePositionEditor(QtWidgets.QWidget):
     def exec_edit(self):
         """显示编辑器并等待结果，返回 (x, y, w, h) 或 None"""
         self.show()
-        self.raise_()  # 确保在最前面
+        self.raise_()
+        self.setFocus()
         loop = QtCore.QEventLoop()
         self._finished.connect(loop.quit)
         loop.exec()
