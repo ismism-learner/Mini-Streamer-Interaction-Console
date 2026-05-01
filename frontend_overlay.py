@@ -89,9 +89,8 @@ class QuestionBubble(QtWidgets.QWidget):
         screen_geo: QtCore.QRect,
         disappear_mode: str = "timed",
         disappear_seconds: int = 4,
-        parent=None,
     ):
-        super().__init__(parent)
+        super().__init__(None)  # 独立顶层窗口，不依附OverlayWindow
         self.screen_geo = screen_geo
         self._disappear_mode = disappear_mode
         self._disappear_seconds = disappear_seconds
@@ -183,7 +182,8 @@ class QuestionBubble(QtWidgets.QWidget):
             and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier
         ):
             self._ctrl_dragging = True
-            self._ctrl_drag_offset = event.position().toPoint()
+            # 记录鼠标全局位置与窗口左上角的偏移
+            self._ctrl_drag_offset = event.globalPosition().toPoint() - self.pos()
             self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
             # 暂停动画，否则 geometry 动画会覆盖拖动
             if (
@@ -198,8 +198,8 @@ class QuestionBubble(QtWidgets.QWidget):
     def mouseMoveEvent(self, event):
         """Ctrl+拖动时移动气泡"""
         if self._ctrl_dragging:
-            delta = event.position().toPoint() - self._ctrl_drag_offset
-            new_pos = self.pos() + delta
+            # 全局坐标 - 初始偏移 = 窗口新位置
+            new_pos = event.globalPosition().toPoint() - self._ctrl_drag_offset
             self.move(new_pos)
             event.accept()
         else:
@@ -221,7 +221,6 @@ class QuestionBubble(QtWidgets.QWidget):
                 hasattr(self, "_anim_group")
                 and self._anim_group.state() == QtCore.QAbstractAnimation.State.Paused
             ):
-                # 更新动画的起始位置为当前位置
                 self._start_x = self.pos().x()
                 self._start_y = self.pos().y()
                 self._anim_group.resume()
@@ -723,7 +722,6 @@ class OverlayWindow(QtWidgets.QWidget):
             self.screen_geo,
             disappear_mode=mode,
             disappear_seconds=seconds,
-            parent=self,
         )
 
         if mode == "keep":
