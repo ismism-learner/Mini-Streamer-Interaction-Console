@@ -8,8 +8,8 @@ import numpy as np
 from faster_whisper import WhisperModel
 from backend.config import config
 
-# 本地模型路径（避免 huggingface 在线下载/验证）
-_LOCAL_MODEL_PATH = str(Path(__file__).parent.parent / "whisper_model")
+# 模型缓存目录
+_MODEL_CACHE_DIR = Path(__file__).parent.parent / "whisper_models"
 
 # 全局模型实例
 _model = None
@@ -18,17 +18,21 @@ _model = None
 def get_model():
     global _model
     if _model is None:
-        print(
-            f"[STT] 加载本地模型: {_LOCAL_MODEL_PATH} (device={config.WHISPER_DEVICE})"
-        )
+        model_size = config.WHISPER_MODEL_SIZE
+        device = config.WHISPER_DEVICE
+        compute_type = config.WHISPER_COMPUTE_TYPE
+
+        print(f"[STT] 加载 Whisper 模型: {model_size} (device={device}, compute_type={compute_type})")
+
+        _MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
         _model = WhisperModel(
-            _LOCAL_MODEL_PATH,
-            device=config.WHISPER_DEVICE,
-            compute_type=config.WHISPER_COMPUTE_TYPE,
+            model_size,
+            device=device,
+            compute_type=compute_type,
             cpu_threads=4,
             num_workers=1,
-            download_root=None,
-            local_files_only=True,
+            download_root=str(_MODEL_CACHE_DIR),
         )
         print("[STT] 模型加载完成")
     return _model

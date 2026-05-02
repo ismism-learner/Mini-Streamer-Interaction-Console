@@ -14,7 +14,8 @@ config.yaml
 # Audio cache
 audio_cache/
 
-# Whisper model (large binary files)
+# Whisper models (large binary files, auto-downloaded)
+whisper_models/
 whisper_model/
 
 # IDE
