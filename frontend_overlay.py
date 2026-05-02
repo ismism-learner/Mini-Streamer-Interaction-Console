@@ -50,6 +50,7 @@ try:
     DISPLAY_HEIGHT = _cfg.DISPLAY_HEIGHT  # 340
     DISPLAY_DISAPPEAR_MODE = _cfg.DISPLAY_DISAPPEAR_MODE  # timed/keep/stack
     DISPLAY_DISAPPEAR_SECONDS = _cfg.DISPLAY_DISAPPEAR_SECONDS  # seconds
+    DISPLAY_STACK_MAX = _cfg.DISPLAY_STACK_MAX  # max bubbles in stack mode
 except Exception:
     DISPLAY_FONT_FAMILY = "Microsoft YaHei UI, PingFang SC, sans-serif"
     DISPLAY_FONT_SIZE = 28
@@ -60,6 +61,7 @@ except Exception:
     DISPLAY_HEIGHT = 340
     DISPLAY_DISAPPEAR_MODE = "timed"
     DISPLAY_DISAPPEAR_SECONDS = 4
+    DISPLAY_STACK_MAX = 5
     _SYSTEM_PROMPT = "（无法加载 LLM 提示词）"
 
 
@@ -384,17 +386,21 @@ class SettingsDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("小主播互动机 - 设置")
-        self.setFixedSize(520, 700)
+        self.setFixedSize(520, 600)
         self._build_ui()
         self._load_current_values()
 
     def _build_ui(self):
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setSpacing(8)
 
-        # ── 显示设置 ──
-        display_group = QtWidgets.QGroupBox("显示设置")
-        display_layout = QtWidgets.QFormLayout(display_group)
+        tab_widget = QtWidgets.QTabWidget()
+
+        # ═══════════════════════════════════════════════════════════════
+        # Tab 1: 显示设置
+        # ═══════════════════════════════════════════════════════════════
+        display_tab = QtWidgets.QWidget()
+        display_layout = QtWidgets.QFormLayout(display_tab)
 
         self.font_combo = QtWidgets.QComboBox()
         chinese_fonts = [
@@ -418,7 +424,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self.emoji_check = QtWidgets.QCheckBox("禁用 emoji")
         display_layout.addRow(self.emoji_check)
 
-        # 消失模式
         self.disappear_combo = QtWidgets.QComboBox()
         self.disappear_combo.addItem("定时消失", "timed")
         self.disappear_combo.addItem("保留到新问题出现", "keep")
@@ -430,14 +435,24 @@ class SettingsDialog(QtWidgets.QDialog):
         self.disappear_spin.setSuffix(" 秒")
         display_layout.addRow("停留时间:", self.disappear_spin)
 
+        self.stack_max_spin = QtWidgets.QSpinBox()
+        self.stack_max_spin.setRange(1, 10)
+        self.stack_max_spin.setValue(5)
+        display_layout.addRow("堆叠数量:", self.stack_max_spin)
+
         self.chars_per_line_spin = QtWidgets.QSpinBox()
         self.chars_per_line_spin.setRange(4, 40)
-        display_layout.addRow("长度:", self.chars_per_line_spin)
+        display_layout.addRow("每行字符数:", self.chars_per_line_spin)
 
-        layout.addWidget(display_group)
+        tab_widget.addTab(display_tab, "显示设置")
 
-        # ── 触发条件 ──
-        trigger_cond_group = QtWidgets.QGroupBox("触发条件")
+        # ═══════════════════════════════════════════════════════════════
+        # Tab 2: 触发条件
+        # ═══════════════════════════════════════════════════════════════
+        trigger_tab = QtWidgets.QWidget()
+        trigger_tab_layout = QtWidgets.QVBoxLayout(trigger_tab)
+
+        trigger_cond_group = QtWidgets.QGroupBox("字数条件")
         trigger_cond_layout = QtWidgets.QFormLayout(trigger_cond_group)
 
         self.min_words_spin = QtWidgets.QSpinBox()
@@ -450,37 +465,113 @@ class SettingsDialog(QtWidgets.QDialog):
         self.max_words_spin.setSuffix(" 字")
         trigger_cond_layout.addRow("最大强制触发:", self.max_words_spin)
 
-        layout.addWidget(trigger_cond_group)
+        trigger_tab_layout.addWidget(trigger_cond_group)
 
-        # ── 截断提示词 ──
-        trigger_group = QtWidgets.QGroupBox("截断提示词")
-        trigger_layout = QtWidgets.QVBoxLayout(trigger_group)
+        trigger_phrases_group = QtWidgets.QGroupBox("截断提示词")
+        trigger_phrases_layout = QtWidgets.QVBoxLayout(trigger_phrases_group)
 
         hint = QtWidgets.QLabel("每行一个提示词，主播说到这些词时立即触发提问")
         hint.setStyleSheet("color: #888; font-size: 12px;")
-        trigger_layout.addWidget(hint)
+        trigger_phrases_layout.addWidget(hint)
 
         self.trigger_edit = QtWidgets.QTextEdit()
         self.trigger_edit.setPlaceholderText("你明白了吗\n听懂了吗\n…")
-        trigger_layout.addWidget(self.trigger_edit)
+        trigger_phrases_layout.addWidget(self.trigger_edit)
 
-        layout.addWidget(trigger_group)
+        trigger_tab_layout.addWidget(trigger_phrases_group)
+        tab_widget.addTab(trigger_tab, "触发条件")
 
-        # ── LLM 提示词 ──
-        llm_group = QtWidgets.QGroupBox("LLM 提示词")
-        llm_layout = QtWidgets.QVBoxLayout(llm_group)
+        # ═══════════════════════════════════════════════════════════════
+        # Tab 3: LLM 配置
+        # ═══════════════════════════════════════════════════════════════
+        llm_tab = QtWidgets.QWidget()
+        llm_tab_layout = QtWidgets.QFormLayout(llm_tab)
+
+        self.llm_api_base_edit = QtWidgets.QLineEdit()
+        self.llm_api_base_edit.setPlaceholderText("https://api.example.com/v1")
+        llm_tab_layout.addRow("API URL:", self.llm_api_base_edit)
+
+        self.llm_api_key_edit = QtWidgets.QLineEdit()
+        self.llm_api_key_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.llm_api_key_edit.setPlaceholderText("sk-xxxxxx")
+        llm_tab_layout.addRow("API Key:", self.llm_api_key_edit)
+
+        self.llm_model_edit = QtWidgets.QLineEdit()
+        self.llm_model_edit.setPlaceholderText("Qwen/Qwen3-8B")
+        llm_tab_layout.addRow("模型名称:", self.llm_model_edit)
+
+        api_key_hint = QtWidgets.QLabel("API Key 仅保存在本地 config.yaml，不会上传")
+        api_key_hint.setStyleSheet("color: #888; font-size: 11px;")
+        llm_tab_layout.addRow(api_key_hint)
+
+        tab_widget.addTab(llm_tab, "LLM 配置")
+
+        # ═══════════════════════════════════════════════════════════════
+        # Tab 4: 语音识别
+        # ═══════════════════════════════════════════════════════════════
+        whisper_tab = QtWidgets.QWidget()
+        whisper_layout = QtWidgets.QFormLayout(whisper_tab)
+
+        self.whisper_model_combo = QtWidgets.QComboBox()
+        self.whisper_model_combo.addItem("tiny (最快)", "tiny")
+        self.whisper_model_combo.addItem("base", "base")
+        self.whisper_model_combo.addItem("small (推荐)", "small")
+        self.whisper_model_combo.addItem("medium", "medium")
+        self.whisper_model_combo.addItem("large (最准)", "large")
+        whisper_layout.addRow("模型大小:", self.whisper_model_combo)
+
+        self.whisper_device_combo = QtWidgets.QComboBox()
+        self.whisper_device_combo.addItem("CPU", "cpu")
+        self.whisper_device_combo.addItem("CUDA (NVIDIA GPU)", "cuda")
+        whisper_layout.addRow("设备:", self.whisper_device_combo)
+
+        self.whisper_compute_combo = QtWidgets.QComboBox()
+        self.whisper_compute_combo.addItem("int8 (推荐)", "int8")
+        self.whisper_compute_combo.addItem("float16", "float16")
+        self.whisper_compute_combo.addItem("float32", "float32")
+        whisper_layout.addRow("计算类型:", self.whisper_compute_combo)
+
+        tab_widget.addTab(whisper_tab, "语音识别")
+
+        # ═══════════════════════════════════════════════════════════════
+        # Tab 5: 服务器
+        # ═══════════════════════════════════════════════════════════════
+        server_tab = QtWidgets.QWidget()
+        server_layout = QtWidgets.QFormLayout(server_tab)
+
+        self.server_host_edit = QtWidgets.QLineEdit()
+        self.server_host_edit.setPlaceholderText("127.0.0.1")
+        server_layout.addRow("主机地址:", self.server_host_edit)
+
+        self.server_port_spin = QtWidgets.QSpinBox()
+        self.server_port_spin.setRange(1, 65535)
+        server_layout.addRow("端口:", self.server_port_spin)
+
+        server_hint = QtWidgets.QLabel("修改后需要重启程序生效")
+        server_hint.setStyleSheet("color: #888; font-size: 11px;")
+        server_layout.addRow(server_hint)
+
+        tab_widget.addTab(server_tab, "服务器")
+
+        # ═══════════════════════════════════════════════════════════════
+        # Tab 6: 高级
+        # ═══════════════════════════════════════════════════════════════
+        advanced_tab = QtWidgets.QWidget()
+        advanced_layout = QtWidgets.QVBoxLayout(advanced_tab)
 
         llm_hint = QtWidgets.QLabel(
             "当前 LLM 系统提示词（只读，可在 backend/llm.py 中修改）"
         )
         llm_hint.setStyleSheet("color: #888; font-size: 12px;")
-        llm_layout.addWidget(llm_hint)
+        advanced_layout.addWidget(llm_hint)
 
         self.prompt_edit = QtWidgets.QTextEdit()
         self.prompt_edit.setReadOnly(True)
-        llm_layout.addWidget(self.prompt_edit)
+        advanced_layout.addWidget(self.prompt_edit)
 
-        layout.addWidget(llm_group)
+        tab_widget.addTab(advanced_tab, "高级")
+
+        layout.addWidget(tab_widget)
 
         # ── 按钮 ──
         btn_layout = QtWidgets.QHBoxLayout()
@@ -513,6 +604,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if idx >= 0:
             self.disappear_combo.setCurrentIndex(idx)
         self.disappear_spin.setValue(DISPLAY_DISAPPEAR_SECONDS)
+        self.stack_max_spin.setValue(_cfg.DISPLAY_STACK_MAX)
         self.chars_per_line_spin.setValue(DISPLAY_CHARS_PER_LINE)
 
         # 触发条件
@@ -522,6 +614,26 @@ class SettingsDialog(QtWidgets.QDialog):
         # 触发词
         if hasattr(_cfg, "TRIGGER_PHRASES"):
             self.trigger_edit.setPlainText("\n".join(_cfg.TRIGGER_PHRASES))
+
+        # LLM 配置
+        self.llm_api_base_edit.setText(_cfg.LLM_API_BASE)
+        self.llm_api_key_edit.setText(_cfg.LLM_API_KEY)
+        self.llm_model_edit.setText(_cfg.LLM_MODEL)
+
+        # Whisper 配置
+        idx = self.whisper_model_combo.findData(_cfg.WHISPER_MODEL_SIZE)
+        if idx >= 0:
+            self.whisper_model_combo.setCurrentIndex(idx)
+        idx = self.whisper_device_combo.findData(_cfg.WHISPER_DEVICE)
+        if idx >= 0:
+            self.whisper_device_combo.setCurrentIndex(idx)
+        idx = self.whisper_compute_combo.findData(_cfg.WHISPER_COMPUTE_TYPE)
+        if idx >= 0:
+            self.whisper_compute_combo.setCurrentIndex(idx)
+
+        # 服务器配置
+        self.server_host_edit.setText(_cfg.SERVER_HOST)
+        self.server_port_spin.setValue(_cfg.SERVER_PORT)
 
         # LLM 提示词
         self.prompt_edit.setPlainText(_SYSTEM_PROMPT)
@@ -537,11 +649,26 @@ class SettingsDialog(QtWidgets.QDialog):
         disable_emoji = self.emoji_check.isChecked()
         disappear_mode = self.disappear_combo.currentData()
         disappear_seconds = self.disappear_spin.value()
+        stack_max = self.stack_max_spin.value()
         chars_per_line = self.chars_per_line_spin.value()
         min_words = self.min_words_spin.value()
         max_words = self.max_words_spin.value()
         trigger_lines = self.trigger_edit.toPlainText().strip().splitlines()
         trigger_phrases = [line.strip() for line in trigger_lines if line.strip()]
+
+        # LLM 配置
+        llm_api_base = self.llm_api_base_edit.text().strip()
+        llm_api_key = self.llm_api_key_edit.text().strip()
+        llm_model = self.llm_model_edit.text().strip()
+
+        # Whisper 配置
+        whisper_model = self.whisper_model_combo.currentData()
+        whisper_device = self.whisper_device_combo.currentData()
+        whisper_compute = self.whisper_compute_combo.currentData()
+
+        # 服务器配置
+        server_host = self.server_host_edit.text().strip()
+        server_port = self.server_port_spin.value()
 
         # 2. 更新运行时全局变量
         DISPLAY_FONT_FAMILY = font_family
@@ -555,8 +682,23 @@ class SettingsDialog(QtWidgets.QDialog):
         _cfg.DISPLAY_DISAPPEAR_MODE = disappear_mode
         _cfg.DISPLAY_DISAPPEAR_SECONDS = disappear_seconds
         _cfg.DISPLAY_CHARS_PER_LINE = chars_per_line
+        _cfg.DISPLAY_STACK_MAX = stack_max
         _cfg.MIN_WORDS_FOR_QUESTION = min_words
         _cfg.MAX_WORDS_FORCE_TRIGGER = max_words
+
+        # LLM 配置
+        _cfg.LLM_API_BASE = llm_api_base
+        _cfg.LLM_API_KEY = llm_api_key
+        _cfg.LLM_MODEL = llm_model
+
+        # Whisper 配置
+        _cfg.WHISPER_MODEL_SIZE = whisper_model
+        _cfg.WHISPER_DEVICE = whisper_device
+        _cfg.WHISPER_COMPUTE_TYPE = whisper_compute
+
+        # 服务器配置
+        _cfg.SERVER_HOST = server_host
+        _cfg.SERVER_PORT = server_port
 
         # 3. 写回 config.yaml
         try:
@@ -570,9 +712,25 @@ class SettingsDialog(QtWidgets.QDialog):
             cfg["DISPLAY_DISAPPEAR_MODE"] = disappear_mode
             cfg["DISPLAY_DISAPPEAR_SECONDS"] = disappear_seconds
             cfg["DISPLAY_CHARS_PER_LINE"] = chars_per_line
+            cfg["DISPLAY_STACK_MAX"] = stack_max
             cfg["MIN_WORDS_FOR_QUESTION"] = min_words
             cfg["MAX_WORDS_FORCE_TRIGGER"] = max_words
             cfg["TRIGGER_PHRASES"] = trigger_phrases
+
+            # LLM 配置
+            cfg["LLM_API_BASE"] = llm_api_base
+            if llm_api_key:
+                cfg["LLM_API_KEY"] = llm_api_key
+            cfg["LLM_MODEL"] = llm_model
+
+            # Whisper 配置
+            cfg["WHISPER_MODEL_SIZE"] = whisper_model
+            cfg["WHISPER_DEVICE"] = whisper_device
+            cfg["WHISPER_COMPUTE_TYPE"] = whisper_compute
+
+            # 服务器配置
+            cfg["SERVER_HOST"] = server_host
+            cfg["SERVER_PORT"] = server_port
 
             with open(config_path, "w", encoding="utf-8") as f:
                 yaml.dump(
@@ -684,12 +842,19 @@ class OverlayWindow(QtWidgets.QWidget):
         """在主线程中创建问题气泡"""
         mode = DISPLAY_DISAPPEAR_MODE
         seconds = DISPLAY_DISAPPEAR_SECONDS
+        stack_max = DISPLAY_STACK_MAX
 
         # keep 模式：新问题出现时，旧问题立即淡出
         if mode == "keep":
             for old_bubble in self._active_bubbles:
                 old_bubble.force_fade_out()
             self._active_bubbles.clear()
+
+        # stack 模式：超过堆叠数量时，移除最旧的气泡
+        if mode == "stack":
+            while len(self._active_bubbles) >= stack_max:
+                old_bubble = self._active_bubbles.pop(0)
+                old_bubble.force_fade_out()
 
         bubble = QuestionBubble(
             text,
@@ -698,7 +863,7 @@ class OverlayWindow(QtWidgets.QWidget):
             disappear_seconds=seconds,
         )
 
-        if mode == "keep":
+        if mode in ("keep", "stack"):
             self._active_bubbles.append(bubble)
 
     def _schedule_reconnect(self):

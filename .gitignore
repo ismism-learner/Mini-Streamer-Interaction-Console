@@ -8,6 +8,9 @@ build/
 # Environment
 .env
 
+# Config (contains API keys)
+config.yaml
+
 # Audio cache
 audio_cache/
 
