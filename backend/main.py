@@ -3,15 +3,11 @@
 import asyncio
 import json
 import sys
-import os
 from pathlib import Path
 
-# 添加项目根目录到 path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import uvicorn
 
@@ -19,12 +15,8 @@ from backend.config import config
 from backend.audio_capture import AudioCapture
 from backend.llm import ask_question
 
-# 当前连接的 WebSocket 客户端
 connected_websockets = set()
 audio_capture = AudioCapture()
-
-# 前端目录
-frontend_dir = Path(__file__).parent.parent / "frontend"
 
 
 @asynccontextmanager
@@ -38,17 +30,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="小主播互动机", lifespan=lifespan)
-
-
-@app.get("/")
-async def serve_frontend():
-    """提供前端页面（仅 OBS 浏览器源兼容）"""
-    return FileResponse(str(frontend_dir / "index.html"))
-
-
-# 挂载前端静态文件（如果目录存在）
-if frontend_dir.exists():
-    app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
 
 
 @app.get("/status")
